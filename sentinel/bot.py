@@ -25,6 +25,7 @@ LABEL_RULES = {
     "documentation": re.compile(r"\b(docs?|documentation|readme|typo)\b", re.I),
 }
 NEW_CONTRIBUTOR = {"FIRST_TIME_CONTRIBUTOR", "FIRST_TIMER", "NONE"}
+TEST_TAG = "[sentinel-test]"  # lets the owner try the bot on their own post
 BUMP = re.compile(r"from v?(\d+)\.(\d+)\.(\d+)\S* to v?(\d+)\.(\d+)\.(\d+)", re.I)
 
 DISCUSSIONS_Q = """query($owner:String!,$name:String!){repository(owner:$owner,name:$name){hasDiscussionsEnabled
@@ -128,7 +129,8 @@ class Sentinel:
             user = issue.get("user") or {}
             labels = {lab["name"].lower() for lab in issue.get("labels", [])}
             text = f"{issue.get('title', '')}\n{issue.get('body') or ''}"
-            if is_bot(user) or user.get("login") == self.owner or "bot-off" in labels or "bot-off" in text:
+            owner_post = user.get("login") == self.owner and TEST_TAG not in text.lower()
+            if is_bot(user) or owner_post or "bot-off" in labels or "bot-off" in text:
                 continue
             comments = self.gh.paged(f"/repos/{name}/issues/{issue['number']}/comments", limit=100)
             if any(marker("triage") in (c.get("body") or "") for c in comments):
@@ -233,8 +235,9 @@ class Sentinel:
             return
         for d in data["discussions"]["nodes"]:
             author = d.get("author") or {}
+            owner_post = author.get("login") == self.owner and TEST_TAG not in f"{d['title']} {d.get('body') or ''}".lower()
             if (d["locked"] or d["isAnswered"] or not self._recent(d["createdAt"]) or is_bot(author)
-                    or author.get("login") == self.owner or "bot-off" in (d.get("body") or "")):
+                    or owner_post or "bot-off" in (d.get("body") or "")):
                 continue
             if any(marker("discussion") in (c.get("body") or "") for c in d["comments"]["nodes"]):
                 continue

@@ -269,3 +269,13 @@ def test_knowledge_picks_relevant_doc():
     docs = {"README.md": "# App\nInstall with pip.", "docs/FAQ.md": "## Change the port\nSet APP_PORT in .env"}
     assert best_excerpts("how to change the port", docs)[0][0] == "docs/FAQ.md"
     assert doc_paths(["README.md", "src/a.py", "docs/x.md", "SECURITY.md"]) == ["README.md", "docs/x.md", "SECURITY.md"]
+
+
+def test_owner_can_trigger_the_bot_with_the_test_tag():
+    fake = FakeGitHub()
+    fake.issues = [issue(1, "[sentinel-test] App crashes on start", login="owner"), issue(2, "crash", login="owner")]
+    fake.discussions = [disc(3, "[sentinel-test] How do I change the port?", login="owner")]
+    make(fake).run()
+    assert any(w[1].endswith("/1/comments") for w in fake.writes)
+    assert not any(w[1].endswith("/2/comments") for w in fake.writes)
+    assert [w[2]["id"] for w in fake.writes if w[0] == "GRAPHQL"] == ["D3"]

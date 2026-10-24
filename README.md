@@ -31,7 +31,7 @@ Everything is done by the GitHub App, so it appears as **nexonic-sentinel[bot]**
 
 ## Settings
 
-Everything lives in [`sentinel.toml`](sentinel.toml): the owner to mention, repositories to skip, how far back to look, the per-run limit on AI answers (to stay inside the free 50 requests a day), the free models to try, and which Dependabot updates may be merged. Set `enabled = false` to stop the bot everywhere. Add the `bot-off` label to an issue or PR, or write `bot-off` in a discussion, to stop it on one thread.
+Everything lives in [`sentinel.toml`](sentinel.toml): the owner to mention, repositories to skip, how far back to look, the per-run limit on AI answers (to stay inside the free 50 requests a day), the free models to try, and which Dependabot updates may be merged. Set `enabled = false` to stop the bot everywhere. Add the `bot-off` label to an issue or PR, or write `bot-off` in a discussion, to stop it on one thread. It ignores the owner's own posts, unless the title or text contains `[sentinel-test]`, which is handy for trying it out.
 
 ## Development
 
