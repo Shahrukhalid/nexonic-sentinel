@@ -131,6 +131,8 @@ def pr(n, title, login="dependabot[bot]", assoc="NONE", sha="abc"):
     ("Bump vite from 6.4.5 to 6.5.0", "minor"),
     ("Bump vite from 6.4.5 to 7.0.0", "major"),
     ("Bump x from 0.3.1 to 0.4.0", "major"),
+    ("Bump actions/checkout from 4 to 7", "major"),
+    ("Bump actions/cache from 4.1 to 4.2", "minor"),
     ("Update some things", None),
 ])
 def test_bump_kind(title, kind):

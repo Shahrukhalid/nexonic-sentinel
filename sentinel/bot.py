@@ -26,7 +26,8 @@ LABEL_RULES = {
 }
 NEW_CONTRIBUTOR = {"FIRST_TIME_CONTRIBUTOR", "FIRST_TIMER", "NONE"}
 TEST_TAG = "[sentinel-test]"  # lets the owner try the bot on their own post
-BUMP = re.compile(r"from v?(\d+)\.(\d+)\.(\d+)\S* to v?(\d+)\.(\d+)\.(\d+)", re.I)
+V = r"v?(\d+)(?:\.(\d+))?(?:\.(\d+))?"  # 1.2.3, 1.2 or just 4 (GitHub Actions)
+BUMP = re.compile(rf"from {V}\S* to {V}", re.I)
 
 DISCUSSIONS_Q = """query($owner:String!,$name:String!){repository(owner:$owner,name:$name){hasDiscussionsEnabled
  discussions(first:25,orderBy:{field:CREATED_AT,direction:DESC}){nodes{id number title body createdAt url isAnswered
@@ -48,7 +49,7 @@ BUMP_LINE = re.compile(r"^\s*(?:Updates|Bumps)\b.*$", re.I | re.M)
 
 
 def _one_kind(m: re.Match) -> str | None:
-    a, b = tuple(map(int, m.groups()[:3])), tuple(map(int, m.groups()[3:]))
+    a, b = (tuple(int(x or 0) for x in m.groups()[:3]), tuple(int(x or 0) for x in m.groups()[3:]))
     if b <= a:
         return None
     if b[0] != a[0]:
