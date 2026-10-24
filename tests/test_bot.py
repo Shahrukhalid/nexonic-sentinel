@@ -37,6 +37,7 @@ class FakeGitHub:
         self.search: list[dict] = []
         self.ext_repos: dict[str, dict] = {}
         self.home_issues: list[dict] = []
+        self.ext_files: dict[str, str] = {}
         self.files = {"README.md": "# App\n\n## Install\n\nRun `pip install app` then `app serve --port 8600`.\n",
                       "docs/FAQ.md": "# FAQ\n\n## Change the port\n\nSet APP_PORT=9000 in .env to change the port.\n"}
 
@@ -91,6 +92,8 @@ class FakeGitHub:
             return httpx.Response(200, text=self.files[p]) if p in self.files else httpx.Response(404)
         if path == "/repos/owner/nexonic-sentinel/issues":
             return httpx.Response(200, json=self.home_issues)
+        if "/contents/" in path and path in self.ext_files:
+            return httpx.Response(200, text=self.ext_files[path])
         return httpx.Response(404, json={"message": f"not faked: {path}"})
 
 

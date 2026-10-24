@@ -47,7 +47,11 @@ See also [SECURITY.md](SECURITY.md).
 
 ## Contribution finder (owner only)
 
-For the account that runs the bot, a daily "Contribution shortlist" issue in this repository lists open issues on other projects where maintainers asked for help (`good first issue`, `help wanted`). Each comes with a drafted approach and the files to look at. The bot never comments or opens pull requests on those projects. You decide what to work on and submit it yourself.
+Every hour, for the account that runs the bot, Nexonic Sentinel hunts for open issues on other projects where maintainers asked for help (`good first issue`, `help wanted`). For each pick it reads the real source files and drafts a fix as a diff, plus a test. A fix is kept only if it applies cleanly to the current code (and still parses, for Python). Picks are added to a "Contribution shortlist" issue in this repository.
+
+The bot never comments, forks or opens pull requests on those projects. You read the fix, run the project's tests, tell the maintainers you are taking the issue, and submit it yourself.
+
+**Models:** `models = ["all-free"]` uses every free text model on OpenRouter, fetched live each run, so new free models are picked up automatically. Bigger models can be listed first. OpenRouter allows 50 free-model requests a day on a key without credits and 1,000 once the account has bought $10 of credits; `daily_llm_budget = "auto"` detects which applies.
 
 ## Run your own copy
 

@@ -59,12 +59,23 @@ def main(argv: list[str] | None = None) -> int:
     ledger = Ledger(GitHub(home_token) if home_token else None, f"{owner}/{cfg.get('home_repo', 'nexonic-sentinel')}",
                     dry_run=dry)
 
-    # One AI budget for the whole run, capped by what is left of today's allowance (free models allow ~50 a day).
+    # One AI budget for the whole run, capped by what is left of today's allowance. OpenRouter allows 50 free-model
+    # requests a day on a key without credits and 1000 once the account has bought at least $10 of credits.
     today = now.date().isoformat()
     used_today = int(ledger.get(f"llm:{today}", 0))
-    left = max(0, int(cfg.get("daily_llm_budget", 45)) - used_today)
     key = os.environ.get("OPENROUTER_API_KEY", "")
-    llm = OpenRouter(key, cfg.get("models", []), budget=min(left, int(cfg.get("max_llm_calls_per_run", 10)))) if key else None
+    llm = None
+    if key:
+        llm = OpenRouter(key, cfg.get("models", ["all-free"]), free_limit=int(cfg.get("free_models_max", 12)),
+                         exclude=cfg.get("exclude_models", []))
+        paid = None
+        if "auto" in (str(cfg.get("daily_llm_budget", "auto")), str(cfg.get("max_llm_calls_per_run", "auto"))):
+            paid = llm.key_info().get("is_free_tier") is False
+        daily = cfg.get("daily_llm_budget", "auto")
+        daily = (950 if paid else 45) if daily == "auto" else int(daily)
+        per_run = cfg.get("max_llm_calls_per_run", "auto")
+        per_run = (30 if paid else 8) if per_run == "auto" else int(per_run)
+        llm.budget = min(max(0, daily - used_today), per_run)
 
     home_report, others = Report(), Report(private=True)
     other_count = 0

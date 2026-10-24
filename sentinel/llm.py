@@ -27,16 +27,63 @@ class LLMQuotaExceeded(LLMError):
     """Every model answered 429: the free daily quota is used up, so stop asking for this run."""
 
 
+ALL_FREE = "all-free"
+MAX_TRIES = 4  # models tried for one prompt before giving up on it
+
+
+def pick_free(catalog: list[dict[str, Any]], limit: int = 12, exclude: list[str] | None = None) -> list[str]:
+    """Every text-only model OpenRouter offers at no cost, largest context window first."""
+    skip = [e.lower() for e in exclude or []]
+    out = []
+    for m in catalog:
+        mid = str(m.get("id", ""))
+        price = m.get("pricing") or {}
+        free = mid.endswith(":free") or (str(price.get("prompt")) in {"0", "0.0"}
+                                         and str(price.get("completion")) in {"0", "0.0"})
+        mods = (m.get("architecture") or {}).get("output_modalities") or ["text"]
+        if not free or list(mods) != ["text"] or mid.startswith("openrouter/") or any(e in mid.lower() for e in skip):
+            continue
+        out.append((int(m.get("context_length") or 0), mid))
+    out.sort(key=lambda t: (-t[0], t[1]))
+    return [mid for _, mid in out[:limit]]
+
+
 class OpenRouter:
     def __init__(self, api_key: str, models: list[str], transport: httpx.BaseTransport | None = None,
-                 budget: int | None = None) -> None:
-        self.models = models
+                 budget: int | None = None, free_limit: int = 12, exclude: list[str] | None = None) -> None:
+        self.models = list(models)
+        self.free_limit, self.exclude = free_limit, exclude or []
+        self.resolved = ALL_FREE not in self.models
         self.http = httpx.Client(base_url=OPENROUTER, transport=transport, timeout=120,
                                  headers={"Authorization": f"Bearer {api_key}",
                                           "X-Title": "Nexonic Sentinel"})
         self.calls = 0
         self.budget = budget  # total calls allowed in this run (None = unlimited)
         self.exhausted = False
+        self.limited: set[str] = set()  # models that hit their rate limit during this run
+
+    def _resolve(self) -> None:
+        """Expand "all-free" into the live list of free models (fetched once per run)."""
+        if self.resolved:
+            return
+        self.resolved = True
+        rest = [m for m in self.models if m != ALL_FREE]
+        try:
+            r = self.http.get("/models")
+            r.raise_for_status()
+            free = pick_free(r.json().get("data", []), self.free_limit, self.exclude)
+        except (httpx.HTTPError, ValueError, AttributeError):
+            free = []
+        self.models = rest + [m for m in free if m not in rest]
+
+    def key_info(self) -> dict[str, Any]:
+        """OpenRouter's view of the key: is_free_tier is false once the account has bought credits."""
+        try:
+            r = self.http.get("/key")
+            r.raise_for_status()
+            return r.json().get("data") or {}
+        except (httpx.HTTPError, ValueError):
+            return {}
 
     def available(self) -> bool:
         return not self.exhausted and (self.budget is None or self.calls < self.budget)
@@ -45,9 +92,13 @@ class OpenRouter:
         """Try each model in order and return the first non-empty reply."""
         if not self.available():
             raise LLMQuotaExceeded("AI budget for this run is used up")
+        self._resolve()
         messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
-        last, limited = "no model available", 0
-        for model in self.models:
+        last, tries = "no model available", 0
+        for model in [m for m in self.models if m not in self.limited]:
+            if tries >= MAX_TRIES or not self.available():
+                break
+            tries += 1
             self.calls += 1
             try:
                 r = self.http.post("/chat/completions", json={"model": model, "messages": messages,
@@ -56,7 +107,7 @@ class OpenRouter:
                 last = f"{model}: {exc.__class__.__name__}"
                 continue
             if r.status_code == 429:
-                limited += 1
+                self.limited.add(model)
                 last = f"{model}: HTTP 429"
                 continue
             if r.status_code != 200:
@@ -68,9 +119,12 @@ class OpenRouter:
                 last = f"{model}: unreadable reply"
                 continue
             if content.strip():
+                if model != self.models[0]:  # keep using the model that works
+                    self.models.remove(model)
+                    self.models.insert(0, model)
                 return content
             last = f"{model}: empty reply"
-        if limited == len(self.models):
+        if self.models and all(m in self.limited for m in self.models):
             self.exhausted = True
             raise LLMQuotaExceeded("free AI quota reached (HTTP 429 from every model)")
         raise LLMError(last)

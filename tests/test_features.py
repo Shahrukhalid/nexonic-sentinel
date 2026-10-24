@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import timedelta
 
 import httpx
 import jwt
@@ -180,7 +181,10 @@ def test_code_scan_skips_findings_already_reported():
 
 
 # ------------------------------------------------------------------ contribution shortlist
-def test_contribution_shortlist_is_created_then_refreshed_daily():
+PARSER = "def parse(text):\n    parts = text.split(',')\n    return parts[0]\n"
+
+
+def contrib_setup():
     fake = FakeGitHub()
     fake.search = [{"html_url": "https://github.com/acme/tool/issues/5", "number": 5, "title": "Parser crashes on empty input",
                     "body": "Steps...", "comments": 1, "labels": [{"name": "good first issue"}],
@@ -188,22 +192,83 @@ def test_contribution_shortlist_is_created_then_refreshed_daily():
     fake.ext_repos["acme/tool"] = {"full_name": "acme/tool", "stargazers_count": 900, "pushed_at": RECENT,
                                    "archived": False, "fork": False, "language": "Python", "default_branch": "main",
                                    "description": "A tool"}
-    llm = fake_llm({"difficulty": "easy", "summary": "Empty input raises IndexError.", "approach": ["Guard empty input"],
-                    "files": ["src/parser.py", "made/up.py"], "test": "Parse an empty string", "worth_it": True})
+    fake.ext_files["/repos/acme/tool/contents/src/parser.py"] = PARSER
+    return fake
+
+
+DRAFT = {"difficulty": "easy", "summary": "Empty input raises IndexError.", "approach": ["Guard empty input"],
+         "files": ["src/parser.py", "made/up.py"], "test": "Parse an empty string", "worth_it": True}
+GOOD_FIX = {"confident": True, "explanation": "Return None for empty input.", "test": "assert parse('') is None",
+            "edits": [{"file": "src/parser.py", "start": 1, "end": 1, "old": "def parse(text):",
+                       "new": "def parse(text):\n    if not text:\n        return None"}]}
+
+
+def test_contribution_hunt_drafts_a_verified_fix_and_runs_hourly():
+    cfg = {**CFG, "contrib": {"every_hours": 1}}
+    fake = contrib_setup()
     ledger = MemLedger()
-    bot = Sentinel(gh(fake), CFG, llm=llm, now=NOW, ledger=ledger)
+    bot = Sentinel(gh(fake), cfg, llm=fake_llm([DRAFT, GOOD_FIX]), now=NOW, ledger=ledger)
     bot.contributions()
     post = [w for w in fake.writes if w[1] == "/repos/owner/nexonic-sentinel/issues"][0][2]
-    assert post["labels"] == ["contribute"] and "Parser crashes on empty input" in post["body"]
-    assert "`src/parser.py`" in post["body"] and "made/up.py" not in post["body"] and "★ 900" in post["body"]
+    body = post["body"]
+    assert post["labels"] == ["contribute"] and "Parser crashes on empty input" in body and "★ 900" in body
+    assert "`src/parser.py`" in body and "made/up.py" not in body
+    assert "```diff" in body and "+    if not text:" in body and "--- a/src/parser.py" in body
     fake.writes.clear()
-    bot.contributions()  # same day: nothing
-    assert fake.writes == []
+    Sentinel(gh(fake), cfg, llm=fake_llm(DRAFT), now=NOW + timedelta(minutes=30), ledger=ledger).contributions()
+    assert fake.writes == []  # not due yet
     fake.home_issues = [{"number": 7, "body": marker("contribute"), "labels": [{"name": "contribute"}]}]
-    later = Sentinel(gh(fake), CFG, llm=llm, now=NOW.replace(day=NOW.day + 1), ledger=ledger)
-    later.contributions()  # next day: the issue already shown is not repeated, the shortlist is edited in place
-    patch = [w for w in fake.writes if w[0] == "PATCH"][0]
-    assert patch[1].endswith("/issues/7") and "Parser crashes" not in patch[2]["body"]
+    Sentinel(gh(fake), cfg, llm=fake_llm(DRAFT), now=NOW + timedelta(hours=1), ledger=ledger).contributions()
+    assert fake.writes == []  # due, but the only issue was already shown: nothing new to post
+    fake.search[0] = {**fake.search[0], "html_url": "https://github.com/acme/tool/issues/6", "number": 6,
+                      "title": "Second bug"}
+    Sentinel(gh(fake), cfg, llm=fake_llm({**DRAFT, "worth_it": True}), now=NOW + timedelta(hours=2),
+             ledger=ledger).contributions()
+    (method, path, data), = fake.writes
+    assert path.endswith("/issues/7/comments") and "Second bug" in data["body"]
+
+
+def test_fix_rejected_when_it_does_not_match_the_real_file_or_breaks_syntax():
+    from sentinel.contrib import apply_edits, check_syntax
+    src = {"src/parser.py": PARSER}
+    wrong_old = [{"file": "src/parser.py", "start": 2, "end": 2, "old": "parts = text.split(';')", "new": "x"}]
+    assert apply_edits(src, wrong_old) is None
+    assert apply_edits(src, [{"file": "other.py", "start": 1, "end": 1, "old": "", "new": ""}]) is None
+    assert apply_edits(src, [{"file": "src/parser.py", "start": 9, "end": 9, "old": "", "new": ""}]) is None
+    ok = apply_edits(src, GOOD_FIX["edits"])
+    assert ok and ok["src/parser.py"].startswith("def parse(text):\n    if not text:")
+    assert not check_syntax("a.py", "def f(:\n")
+    fake = contrib_setup()
+    broken = {**GOOD_FIX, "edits": [{**GOOD_FIX["edits"][0], "new": "def parse(text:"}]}
+    Sentinel(gh(fake), CFG, llm=fake_llm([DRAFT, broken]), now=NOW, ledger=MemLedger()).contributions()
+    body = [w for w in fake.writes if w[1] == "/repos/owner/nexonic-sentinel/issues"][0][2]["body"]
+    assert "Guard empty input" in body and "```diff" not in body
+
+
+def test_all_free_models_are_discovered_and_rate_limited_ones_skipped():
+    from sentinel.llm import pick_free
+    catalog = [{"id": "big/model:free", "context_length": 262000, "pricing": {"prompt": "0", "completion": "0"}},
+               {"id": "paid/model", "context_length": 999999, "pricing": {"prompt": "0.000001", "completion": "0.000002"}},
+               {"id": "small/model:free", "context_length": 8000, "pricing": {"prompt": "0", "completion": "0"}},
+               {"id": "img/model:free", "context_length": 9000, "architecture": {"output_modalities": ["image"]}},
+               {"id": "music/model", "context_length": 9000, "pricing": {"prompt": "0", "completion": "0"},
+                "architecture": {"output_modalities": ["text", "audio"]}},
+               {"id": "openrouter/free", "context_length": 9000000, "pricing": {"prompt": "0", "completion": "0"}}]
+    assert pick_free(catalog) == ["big/model:free", "small/model:free"]
+    assert pick_free(catalog, exclude=["small"]) == ["big/model:free"]
+    tried = []
+
+    def handler(req):
+        if req.url.path.endswith("/models"):
+            return httpx.Response(200, json={"data": catalog})
+        model = json.loads(req.content)["model"]
+        tried.append(model)
+        if model == "big/model:free":
+            return httpx.Response(429)
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+    llm = OpenRouter("k", ["all-free"], transport=httpx.MockTransport(handler))
+    assert llm.complete("s", "u") == "ok" and llm.complete("s", "u") == "ok"
+    assert tried == ["big/model:free", "small/model:free", "small/model:free"]
 
 
 # ------------------------------------------------------------------ ledger, budget, auth

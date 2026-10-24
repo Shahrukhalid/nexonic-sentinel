@@ -453,11 +453,17 @@ class Sentinel:
 
     # ------------------------------------------------------------------ contribution shortlist (owner only)
     def contributions(self) -> None:
-        if not self.home or self.ledger is None or not self.cfg.get("contrib", {}).get("enabled", True):
+        c = self.cfg.get("contrib", {})
+        if not self.home or self.ledger is None or not c.get("enabled", True):
             return
-        day = self.now.date().isoformat()
-        if self.ledger.get("contrib") == day:
-            return
+        every = max(1.0, float(c.get("every_hours", 24)))
+        last = self.ledger.get("contrib_at")
+        if last:
+            try:
+                if self.now - datetime.fromisoformat(last) < timedelta(hours=every) - timedelta(minutes=10):
+                    return
+            except ValueError:
+                pass
         home = f"{self.owner}/{self.cfg.get('home_repo', 'nexonic-sentinel')}"
         hasher = lambda url: lkey("contrib", url)  # noqa: E731
         seen_list = list(self.ledger.get("contrib_seen", []))
@@ -466,18 +472,25 @@ class Sentinel:
         picks = contrib.find(self.gh, llm, self.cfg, self.owner, self.now, seen, hasher)
         seen.update(hasher(p["url"]) for p in picks)
         seen_list += [k for k in seen if k not in set(seen_list)]
-        self.ledger.set("contrib_seen", seen_list[-400:])
-        self.ledger.set("contrib", day)
-        body = marker("contribute") + "\n" + contrib.render(picks, day) + FOOTER
+        self.ledger.set("contrib_seen", seen_list[-1500:])
+        self.ledger.set("contrib_at", self.now.isoformat(timespec="minutes"))
+        if not picks:
+            return
+        stamp = self.now.strftime("%Y-%m-%d %H:%M UTC")
+        fixes = sum(1 for p in picks if (p.get("draft") or {}).get("fix"))
         existing = [i for i in self.gh.paged(f"/repos/{home}/issues", state="open", labels="contribute", limit=5)
                     if marker("contribute") in (i.get("body") or "")]
+        update = contrib.render(picks, stamp)
         if existing:
-            self._write(f"{home}: refresh contribution shortlist ({len(picks)})", self.gh.request, "PATCH",
-                        f"/repos/{home}/issues/{existing[0]['number']}", json={"body": body})
+            self._write(f"{home}: add {len(picks)} contribution picks ({fixes} with fixes)", self.gh.comment, home,
+                        existing[0]["number"], update + FOOTER)
         else:
-            self._write(f"{home}: create contribution shortlist ({len(picks)})", self.gh.request, "POST",
-                        f"/repos/{home}/issues", json={"title": "Contribution shortlist", "body": body,
-                                                       "labels": ["contribute"]})
+            intro = (marker("contribute") + "\nOpen-source issues where maintainers asked for help, found by "
+                     "Nexonic Sentinel, with drafted fixes where the bot could verify they apply. New picks are added "
+                     "as comments. Close this issue to start a fresh one.\n\n" + update + FOOTER)
+            self._write(f"{home}: create contribution shortlist ({len(picks)}, {fixes} with fixes)",
+                        self.gh.request, "POST", f"/repos/{home}/issues",
+                        json={"title": "Contribution shortlist", "body": intro, "labels": ["contribute"]})
 
     # ------------------------------------------------------------------ weekly digest
     def digest(self) -> None:

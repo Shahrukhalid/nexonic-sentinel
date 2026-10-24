@@ -8,18 +8,24 @@ home_repo = "nexonic-sentinel"
 skip_repos = ["Shahrukhalid"] # repositories the bot ignores (profile README)
 lookback_hours = 72           # only new issues, PRs and discussions from this window
 
-# AI budget. Free OpenRouter models allow about 50 requests a day without credits.
-daily_llm_budget = 45
-max_llm_calls_per_run = 10
+# AI budget. "auto" reads the OpenRouter key: 45 requests a day and 8 a run on a key without credits,
+# 950 a day and 30 a run once the account has bought credits (OpenRouter then allows 1000 free requests a day).
+daily_llm_budget = "auto"
+max_llm_calls_per_run = "auto"
 public_llm_calls_per_install = 3  # cap per run for accounts other than the owner that opted in to AI
 max_installations = 50
 
-# Free OpenRouter models, tried in order
+# "all-free" = every free text model on OpenRouter, fetched live each run (new free models are picked up
+# automatically). The biggest ones are listed first so they are tried first. The bot sticks with whichever
+# model answers and skips any that hit their rate limit for the rest of the run.
 models = [
+  "nvidia/nemotron-3-ultra-550b-a55b:free",
   "nvidia/nemotron-3-super-120b-a12b:free",
   "google/gemma-4-31b-it:free",
-  "nvidia/nemotron-3-ultra-550b-a55b:free",
+  "all-free",
 ]
+free_models_max = 20
+exclude_models = ["content-safety", "guard", "2.6b"]  # classifiers and tiny models write poor fixes
 
 [features]
 # Defaults for the owner's own repositories. Other accounts start with ai = false and no automatic merges.
@@ -39,12 +45,18 @@ min_severity = "medium"
 max_file_bytes = 15000
 
 [contrib]
-# Daily shortlist of open-source issues where maintainers asked for help, posted in the home repository only.
+# Hourly hunt for open-source issues where maintainers asked for help. For each pick the bot reads the real files
+# and drafts a fix, kept only if it applies cleanly to the current code (and parses, for Python).
+# Picks are posted in the home repository only; the bot never comments or opens pull requests elsewhere.
 enabled = true
-languages = ["python", "typescript"]
+every_hours = 1
+languages = ["python", "typescript", "javascript"]
 min_stars = 30
-max_items = 5
+max_items = 2              # picks per hunt
 max_age_days = 30
+draft_fix = true
+fix_files = 2              # files read for each fix
+max_file_bytes = 20000
 
 [automerge]
 # Dependabot updates merged automatically once every check passes. Major updates always wait for you.
