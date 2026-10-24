@@ -32,6 +32,11 @@ class FakeGitHub:
         self.checks: dict[str, list[dict]] = {}
         self.discussions: list[dict] = []
         self.labels = [{"name": "bug"}, {"name": "question"}, {"name": "enhancement"}]
+        self.reviews: dict[int, list[dict]] = {}
+        self.pr_files: dict[int, list[dict]] = {}
+        self.search: list[dict] = []
+        self.ext_repos: dict[str, dict] = {}
+        self.home_issues: list[dict] = []
         self.files = {"README.md": "# App\n\n## Install\n\nRun `pip install app` then `app serve --port 8600`.\n",
                       "docs/FAQ.md": "# FAQ\n\n## Change the port\n\nSet APP_PORT=9000 in .env to change the port.\n"}
 
@@ -39,7 +44,7 @@ class FakeGitHub:
         path, method = req.url.path, req.method
         if method != "GET" and path != "/graphql":
             self.writes.append((method, path, json.loads(req.content or b"{}")))
-            return httpx.Response(201, json={"ok": True})
+            return httpx.Response(201, json={"ok": True, "number": 99})
         if path == "/graphql":
             body = json.loads(req.content)
             if "mutation" in body["query"]:
@@ -58,19 +63,34 @@ class FakeGitHub:
             return httpx.Response(200, json=self.comments.get(int(path.split("/")[-2]), []))
         if path == "/repos/owner/app/pulls":
             return httpx.Response(200, json=self.pulls)
+        if path.startswith("/repos/owner/app/pulls/") and path.endswith("/reviews"):
+            return httpx.Response(200, json=self.reviews.get(int(path.split("/")[-2]), []))
+        if path.startswith("/repos/owner/app/pulls/") and path.endswith("/files"):
+            return httpx.Response(200, json=self.pr_files.get(int(path.split("/")[-2]), []))
         if path.startswith("/repos/owner/app/pulls/"):
             return httpx.Response(200, json=self.pull_detail[int(path.rsplit("/", 1)[1])])
+        if path == "/repos/owner/app/commits/main":
+            return httpx.Response(200, json={"sha": "headsha0000000"})
+        if path == "/search/issues":
+            return httpx.Response(200, json={"items": self.search})
+        if path in {f"/repos/{k}" for k in self.ext_repos}:
+            return httpx.Response(200, json=self.ext_repos[path[len("/repos/"):]])
+        if path.startswith("/repos/") and "/git/trees/" in path and not path.startswith("/repos/owner/app/"):
+            return httpx.Response(200, json={"tree": [{"path": "src/parser.py", "type": "blob", "size": 900},
+                                                      {"path": "README.md", "type": "blob", "size": 300}]})
         if path.endswith("/check-runs"):
             return httpx.Response(200, json={"check_runs": self.checks.get(path.split("/")[-2], [])})
         if path.endswith("/status"):
             return httpx.Response(200, json={"total_count": 0, "state": "pending"})
         if path == "/repos/owner/app/git/trees/main":
-            return httpx.Response(200, json={"tree": [{"path": p, "type": "blob"} for p in [*self.files, "src/x.py"]]})
+            paths = [*self.files, "src/x.py"]
+            return httpx.Response(200, json={"tree": [{"path": p, "type": "blob", "size": len(self.files.get(p, "x" * 50))}
+                                                      for p in paths]})
         if path.startswith("/repos/owner/app/contents/"):
             p = path.split("/contents/", 1)[1]
             return httpx.Response(200, text=self.files[p]) if p in self.files else httpx.Response(404)
         if path == "/repos/owner/nexonic-sentinel/issues":
-            return httpx.Response(200, json=[])
+            return httpx.Response(200, json=self.home_issues)
         return httpx.Response(404, json={"message": f"not faked: {path}"})
 
 
@@ -190,9 +210,16 @@ def disc(n, title, body="", answerable=True, comments=(), login="bob", category=
             "category": {"name": category, "isAnswerable": answerable}, "comments": {"nodes": list(comments)}}
 
 
-def fake_llm(reply: dict):
+def fake_llm(reply, prompts=None):
+    """A model that always returns `reply` (a dict, or a list of dicts used in turn)."""
+    replies = reply if isinstance(reply, list) else None
+
     def handler(req):
-        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(reply)}}]})
+        body = json.loads(req.content)
+        if prompts is not None:
+            prompts.append(body["messages"][1]["content"])
+        out = replies.pop(0) if replies else reply
+        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(out)}}]})
     return OpenRouter("k", ["m1"], transport=httpx.MockTransport(handler))
 
 
@@ -236,8 +263,9 @@ def test_llm_cap_per_run():
     fake = FakeGitHub()
     fake.discussions = [disc(i, "How do I change the port?") for i in range(1, 6)]
     llm = fake_llm({"confident": True, "answer": "Set APP_PORT=9000 in .env and restart.", "sources": ["docs/FAQ.md"]})
+    llm.budget = 3  # the run's AI budget (set from max_llm_calls_per_run and the daily allowance)
     make(fake, llm=llm).run()
-    assert llm.calls == 3  # max_llm_calls_per_run
+    assert llm.calls == 3
     bodies = [w[2]["body"] for w in fake.writes if w[0] == "GRAPHQL"]
     assert sum("APP_PORT" in b for b in bodies) == 3 and sum("flagged" in b for b in bodies) == 2
 

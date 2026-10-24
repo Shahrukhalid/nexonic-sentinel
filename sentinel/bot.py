@@ -8,9 +8,12 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
-from . import knowledge
+from . import contrib, knowledge, review
+from . import settings as repo_settings
 from .github import GitHub, GitHubError
-from .llm import LLMError, OpenRouter
+from .ledger import Ledger
+from .ledger import key as lkey
+from .llm import LLMError, LLMQuotaExceeded, OpenRouter, json_from
 
 log = logging.getLogger("sentinel")
 
@@ -77,49 +80,50 @@ class Report:
     actions: list[str] = field(default_factory=list)
     flagged: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
+    private: bool = False  # other people's installations: never print their repository names in public logs
 
     def act(self, text: str) -> None:
-        log.info(text)
+        if not self.private:
+            log.info(text)
         self.actions.append(text)
 
 
 class Sentinel:
     def __init__(self, gh: GitHub, cfg: dict[str, Any], llm: OpenRouter | None = None, dry_run: bool = False,
-                 now: datetime | None = None) -> None:
-        self.gh, self.cfg, self.llm, self.dry = gh, cfg, llm, dry_run
+                 now: datetime | None = None, ledger: Ledger | None = None, home: bool = True,
+                 ai_cap: int | None = None) -> None:
+        self.gh, self.cfg, self.llm, self.dry, self.ledger, self.home = gh, cfg, llm, dry_run, ledger, home
         self.owner = cfg["owner"]
         # Mentioning the owner sends them a GitHub notification email on every comment; off by default.
-        mention = bool(cfg.get("mention_owner", False))
+        mention = bool(cfg.get("mention_owner", False)) and home
         self.them = f"@{self.owner}" if mention else "the maintainer"
         self.They = f"@{self.owner}" if mention else "The maintainer"
         self.now = now or datetime.now(timezone.utc)
         self.since = self.now - timedelta(hours=int(cfg.get("lookback_hours", 72)))
-        self.report = Report()
+        self.report = Report(private=not home)
+        self.base = repo_settings.home_defaults(cfg) if home else dict(repo_settings.PUBLIC_DEFAULTS)
+        self.ai_cap = ai_cap
+        self.ai_start = llm.calls if llm else 0
         self._docs: dict[str, dict[str, str]] = {}
+        self._settings: dict[str, dict[str, Any]] = {}
 
-    # ------------------------------------------------------------------ writes (respect dry run)
-    def _write(self, description: str, fn: Callable, *args, **kwargs) -> None:
+    # ------------------------------------------------------------------ helpers
+    def _write(self, description: str, fn: Callable, *args, **kwargs) -> Any:
         self.report.act(("[dry run] " if self.dry else "") + description)
         if not self.dry:
-            fn(*args, **kwargs)
+            return fn(*args, **kwargs)
+        return None
 
-    # ------------------------------------------------------------------ entry point
-    def run(self) -> Report:
-        if not self.cfg.get("enabled", True):
-            self.report.act("Disabled in sentinel.toml; nothing done.")
-            return self.report
-        skip = set(self.cfg.get("skip_repos", []))
-        for repo in self.gh.repos():
-            if repo["name"] in skip:
-                continue
-            for step in (self.issues, self.pulls, self.discussions):
-                try:
-                    step(repo)
-                except (GitHubError, LLMError) as exc:
-                    msg = f"{repo['full_name']} {step.__name__}: {exc}"
-                    log.warning(msg)
-                    self.report.errors.append(msg)
-        return self.report
+    def settings(self, repo: dict) -> dict[str, Any]:
+        name = repo["full_name"]
+        if name not in self._settings:
+            self._settings[name] = repo_settings.parse(self.gh.raw_file(name, repo_settings.FILE), self.base)
+        return self._settings[name]
+
+    def _ai_ok(self, s: dict[str, Any]) -> bool:
+        if not s.get("ai") or self.llm is None or not self.llm.available():
+            return False
+        return self.ai_cap is None or self.llm.calls - self.ai_start < self.ai_cap
 
     def _recent(self, stamp: str) -> bool:
         return datetime.fromisoformat(stamp.replace("Z", "+00:00")) >= self.since
@@ -136,6 +140,45 @@ class Sentinel:
         uniq = list(dict.fromkeys(paths))
         return "\n".join(f"- [{p}](https://github.com/{repo['full_name']}/blob/{branch}/{p})" for p in uniq)
 
+    def _error(self, repo: dict, where: str, exc: Exception) -> None:
+        detail = f"{repo['full_name']} {where}: {exc}" if self.home else f"{where}: {exc.__class__.__name__}"
+        if self.home:
+            log.warning(detail)
+        self.report.errors.append(detail)
+
+    # ------------------------------------------------------------------ entry point
+    def run(self) -> Report:
+        if not self.cfg.get("enabled", True):
+            self.report.act("Disabled in sentinel.toml; nothing done.")
+            return self.report
+        skip = set(self.cfg.get("skip_repos", [])) if self.home else set()
+        for repo in self.gh.repos():
+            if repo["name"] in skip:
+                continue
+            try:
+                s = self.settings(repo)
+            except GitHubError as exc:
+                self._error(repo, "settings", exc)
+                continue
+            if not s["enabled"]:
+                continue
+            steps: list[Callable] = []
+            if s["triage"]:
+                steps.append(self.issues)
+            steps.append(self.pulls)
+            if s["discussions"]:
+                steps.append(self.discussions)
+            if s["ai"] and s["code_scan"]:
+                steps.append(self.code_scan)
+            for step in steps:
+                try:
+                    step(repo)
+                except LLMQuotaExceeded as exc:
+                    self.report.flagged.append(f"AI paused: {exc}")
+                except (GitHubError, LLMError) as exc:
+                    self._error(repo, step.__name__, exc)
+        return self.report
+
     # ------------------------------------------------------------------ issues
     def issues(self, repo: dict) -> None:
         name = repo["full_name"]
@@ -150,6 +193,8 @@ class Sentinel:
             text = f"{issue.get('title', '')}\n{issue.get('body') or ''}"
             owner_post = user.get("login") == self.owner and TEST_TAG not in text.lower()
             if is_bot(user) or owner_post or "bot-off" in labels or "bot-off" in text:
+                continue
+            if labels & {"digest", "ledger", "code-health", "contribute"}:
                 continue
             comments = self.gh.paged(f"/repos/{name}/issues/{issue['number']}/comments", limit=100)
             if any(marker("triage") in (c.get("body") or "") for c in comments):
@@ -182,14 +227,20 @@ class Sentinel:
     # ------------------------------------------------------------------ pull requests
     def pulls(self, repo: dict) -> None:
         name = repo["full_name"]
+        s = self.settings(repo)
         for pr in self.gh.paged(f"/repos/{name}/pulls", state="open", limit=100):
             user = pr.get("user") or {}
             if pr.get("draft") or "bot-off" in {lab["name"].lower() for lab in pr.get("labels", [])}:
                 continue
             if user.get("login") == "dependabot[bot]":
-                self._dependabot(repo, pr)
-            elif not is_bot(user) and user.get("login") != self.owner and self._recent(pr["created_at"]):
+                self._dependabot(repo, pr, s)
+                continue
+            if is_bot(user):
+                continue
+            if s["welcome"] and user.get("login") != self.owner and self._recent(pr["created_at"]):
                 self._welcome_pr(repo, pr)
+            if s["pr_review"] and self._recent(pr.get("updated_at") or pr["created_at"]) and self._ai_ok(s):
+                self._review_pr(repo, pr, s)
 
     def _has_marker(self, repo: str, number: int, kind: str) -> bool:
         comments = self.gh.paged(f"/repos/{repo}/issues/{number}/comments", limit=100)
@@ -208,6 +259,52 @@ class Sentinel:
         self._write(f"{name}#{n}: welcome new contributor", self.gh.comment, name, n, body)
         self.report.flagged.append(f"{name}#{n} (new contributor PR to review)")
 
+    def _review_pr(self, repo: dict, pr: dict, s: dict[str, Any]) -> None:
+        """AI bug review, once per head commit. Posted as a plain review comment: never approves or blocks."""
+        name, n, sha = repo["full_name"], pr["number"], pr["head"]["sha"]
+        mark = marker(f"review:{sha[:12]}")
+        attempted = lkey("review", name, sha)
+        if self.ledger is not None and self.ledger.get(attempted):
+            return
+        reviews = self.gh.paged(f"/repos/{name}/pulls/{n}/reviews", limit=100)
+        if any(mark in (r.get("body") or "") for r in reviews):
+            return
+        rc = self.cfg.get("review", {})
+        files = self.gh.paged(f"/repos/{name}/pulls/{n}/files", limit=100)
+        code = [f for f in files if review.reviewable(f["filename"]) and f.get("patch")]
+        if not code:
+            return
+        if len(code) > int(rc.get("max_files", 30)) or sum(len(f["patch"]) for f in code) > int(rc.get("max_patch_chars", 30000)):
+            return  # too large for a useful automatic review
+        prompt, lines = review.review_prompt(pr, code)
+        reply = self.llm.complete(review.REVIEW_SYSTEM, prompt, 1800)  # quota errors propagate: retried next run
+        if self.ledger is not None:
+            self.ledger.set(attempted, self.now.date().isoformat())
+        try:
+            raw = json_from(reply)
+        except ValueError:
+            return
+        findings = review.clean_findings(raw, lines, rc.get("min_severity", "medium"), 5)
+        runs = self.gh.get(f"/repos/{name}/commits/{sha}/check-runs", per_page=100).get("check_runs", [])
+        failing = [r for r in runs if r.get("conclusion") in ("failure", "timed_out", "action_required")]
+        if not findings and not failing and not rc.get("post_when_clean", True):
+            return
+        link = lambda f: f"https://github.com/{name}/blob/{sha}/{f['file']}#L{f['line']}"  # noqa: E731
+        parts = [mark, f"### Automated review of `{sha[:7]}`"]
+        if findings:
+            parts.append(f"I found {len(findings)} likely bug{'s' if len(findings) > 1 else ''} in the changed lines:")
+            parts.append(review.render(findings, link))
+        else:
+            parts.append("I didn't spot likely bugs in the changed lines.")
+        if failing:
+            parts.append("**Failing checks:** " + ", ".join(f"[{r['name']}]({r.get('html_url', '')})" for r in failing[:6]))
+        parts.append("<sub>An AI model read only the diff, so treat these as hints and check them against the code. "
+                     "Reply here if something is wrong.</sub>")
+        body = "\n\n".join(parts) + FOOTER
+        self._write(f"{name}#{n}: review {sha[:7]} ({len(findings)} finding{'s' if len(findings) != 1 else ''})",
+                    self.gh.request, "POST", f"/repos/{name}/pulls/{n}/reviews",
+                    json={"commit_id": sha, "event": "COMMENT", "body": body})
+
     def _checks_green(self, repo: str, sha: str) -> bool:
         runs = self.gh.get(f"/repos/{repo}/commits/{sha}/check-runs", per_page=100).get("check_runs", [])
         if not runs:
@@ -216,10 +313,12 @@ class Sentinel:
         status = self.gh.get(f"/repos/{repo}/commits/{sha}/status")
         return ok and (status.get("total_count", 0) == 0 or status.get("state") == "success")
 
-    def _dependabot(self, repo: dict, pr: dict) -> None:
+    def _dependabot(self, repo: dict, pr: dict, s: dict[str, Any]) -> None:
         name, n = repo["full_name"], pr["number"]
         kind = bump_kind(pr.get("title", ""), pr.get("body") or "")
-        allowed = set(self.cfg.get("automerge", {}).get("dependabot", ["patch", "minor"]))
+        allowed = set(s["dependabot"])
+        if not allowed:
+            return  # this repository has not opted in to automatic dependency handling
         if kind not in allowed:
             if not self._has_marker(name, n, "major"):
                 self._write(f"{name}#{n}: flag {kind or 'unrecognised'} dependency update for review", self.gh.comment,
@@ -281,12 +380,13 @@ class Sentinel:
             return (f"{marker('discussion')}Thanks, @{who}. This touches on security or legal matters, so I've left it "
                     f"for {self.them} to answer personally." + FOOTER)
         excerpts = knowledge.best_excerpts(question, self._docs_for(repo))
-        cap = int(self.cfg.get("max_llm_calls_per_run", 6))
-        if self.llm is not None and excerpts and self.llm.calls < cap:
+        if excerpts and self._ai_ok(self.settings(repo)):
             try:
                 reply = self.llm.answer(repo["full_name"], question, excerpts)
+            except LLMQuotaExceeded:
+                raise
             except LLMError as exc:
-                self.report.errors.append(f"{repo['full_name']} discussion #{d['number']}: {exc}")
+                self._error(repo, f"discussion #{d['number']}", exc)
                 reply = {"confident": False}
             if reply.get("confident"):
                 return (f"{marker('discussion')}Hi @{who}, here's what the project's documentation says:\n\n"
@@ -295,6 +395,89 @@ class Sentinel:
         self.report.flagged.append(f"{repo['full_name']} discussion #{d['number']} (needs an answer)")
         return (f"{marker('discussion')}Thanks for asking, @{who}! I couldn't find a clear answer in the docs, so I've "
                 f"flagged this for {self.them}." + FOOTER)
+
+    # ------------------------------------------------------------------ weekly code health scan
+    def code_scan(self, repo: dict) -> None:
+        """Once a week, read a few source files (a different slice each week) and report likely bugs in one issue."""
+        if self.ledger is None or not repo.get("has_issues", True):
+            return
+        name, branch = repo["full_name"], repo.get("default_branch", "main")
+        week = self.now.strftime("%G-W%V")
+        done = lkey("scan", name)
+        if self.ledger.get(done) == week:
+            return
+        s = self.settings(repo)
+        sc = self.cfg.get("scan", {})
+        candidates = sorted(p for p, size in self.gh.tree_entries(name, branch)
+                            if review.scannable(p) and 200 <= size <= int(sc.get("max_file_bytes", 15000)))
+        if not candidates:
+            self.ledger.set(done, week)
+            return
+        per_week = min(int(sc.get("files_per_week", 4)), len(candidates))
+        start = (int(self.now.strftime("%V")) * per_week) % len(candidates)
+        chosen = [candidates[(start + i) % len(candidates)] for i in range(per_week)]
+        previous = set()
+        for issue in self.gh.paged(f"/repos/{name}/issues", state="all", labels="code-health", limit=30):
+            previous.update(re.findall(r"<!-- fp:([0-9a-f]{10}) -->", issue.get("body") or ""))
+        head = self.gh.get(f"/repos/{name}/commits/{branch}")["sha"]
+        findings = []
+        for path in chosen:
+            if not self._ai_ok(s):
+                return  # budget used up: try again on the next run, the week is not marked as done
+            text = self.gh.raw_file(name, path)
+            if not text:
+                continue
+            try:
+                raw = json_from(self.llm.complete(review.SCAN_SYSTEM, f"File: {path}\n\n{review.number_lines(text)}", 1500))
+            except LLMQuotaExceeded:
+                raise
+            except (LLMError, ValueError):
+                continue  # one unreadable reply must not block the weekly scan
+            valid = {path: set(range(1, len(text.splitlines()) + 1))}
+            findings += review.clean_findings(raw, valid, sc.get("min_severity", "medium"), 3, default_file=path)
+        self.ledger.set(done, week)
+        findings = [f for f in findings if review.fingerprint(f["file"], f["title"]) not in previous]
+        if not findings:
+            self.report.act(f"{name}: code scan {week}, nothing new" if self.home else "code scan, nothing new")
+            return
+        link = lambda f: f"https://github.com/{name}/blob/{head}/{f['file']}#L{f['line']}"  # noqa: E731
+        body = (f"{marker('code-health')}This week I read {len(chosen)} source files "
+                f"({', '.join(f'`{p}`' for p in chosen)}) and found {len(findings)} likely "
+                f"bug{'s' if len(findings) > 1 else ''}. Each week covers a different set of files.\n\n"
+                + review.render(findings, link)
+                + "\n\n<sub>An AI model reviewed these files, so check each finding against the code before fixing it. "
+                  "Close this issue once handled; findings already reported are not repeated.</sub>" + FOOTER)
+        self._write(f"{name}: code health report {week} ({len(findings)} findings)", self.gh.request, "POST",
+                    f"/repos/{name}/issues", json={"title": f"Code health report {week}", "body": body,
+                                                   "labels": ["code-health"]})
+
+    # ------------------------------------------------------------------ contribution shortlist (owner only)
+    def contributions(self) -> None:
+        if not self.home or self.ledger is None or not self.cfg.get("contrib", {}).get("enabled", True):
+            return
+        day = self.now.date().isoformat()
+        if self.ledger.get("contrib") == day:
+            return
+        home = f"{self.owner}/{self.cfg.get('home_repo', 'nexonic-sentinel')}"
+        hasher = lambda url: lkey("contrib", url)  # noqa: E731
+        seen_list = list(self.ledger.get("contrib_seen", []))
+        seen = set(seen_list)
+        llm = self.llm if self._ai_ok(self.base) else None
+        picks = contrib.find(self.gh, llm, self.cfg, self.owner, self.now, seen, hasher)
+        seen.update(hasher(p["url"]) for p in picks)
+        seen_list += [k for k in seen if k not in set(seen_list)]
+        self.ledger.set("contrib_seen", seen_list[-400:])
+        self.ledger.set("contrib", day)
+        body = marker("contribute") + "\n" + contrib.render(picks, day) + FOOTER
+        existing = [i for i in self.gh.paged(f"/repos/{home}/issues", state="open", labels="contribute", limit=5)
+                    if marker("contribute") in (i.get("body") or "")]
+        if existing:
+            self._write(f"{home}: refresh contribution shortlist ({len(picks)})", self.gh.request, "PATCH",
+                        f"/repos/{home}/issues/{existing[0]['number']}", json={"body": body})
+        else:
+            self._write(f"{home}: create contribution shortlist ({len(picks)})", self.gh.request, "POST",
+                        f"/repos/{home}/issues", json={"title": "Contribution shortlist", "body": body,
+                                                       "labels": ["contribute"]})
 
     # ------------------------------------------------------------------ weekly digest
     def digest(self) -> None:

@@ -63,12 +63,15 @@ class GitHub:
         r = self.http.get(f"/repos/{repo}/contents/{path}", headers={"Accept": "application/vnd.github.raw+json"})
         return r.text if r.status_code == 200 else None
 
-    def tree(self, repo: str, branch: str) -> list[str]:
+    def tree_entries(self, repo: str, branch: str) -> list[tuple[str, int]]:
         try:
             data = self.get(f"/repos/{repo}/git/trees/{branch}", recursive=1)
         except GitHubError:
             return []
-        return [t["path"] for t in data.get("tree", []) if t.get("type") == "blob"]
+        return [(t["path"], int(t.get("size") or 0)) for t in data.get("tree", []) if t.get("type") == "blob"]
+
+    def tree(self, repo: str, branch: str) -> list[str]:
+        return [p for p, _ in self.tree_entries(repo, branch)]
 
     def comment(self, repo: str, number: int, body: str) -> dict:
         return self.request("POST", f"/repos/{repo}/issues/{number}/comments", json={"body": body})

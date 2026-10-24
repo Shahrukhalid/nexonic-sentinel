@@ -1,37 +1,61 @@
 # Nexonic Sentinel
 
-**An automated maintainer assistant for GitHub repositories.** It runs on a schedule with GitHub Actions (no server, nothing to keep online) and looks after every repository its GitHub App is installed on: it triages new issues, welcomes first-time contributors, answers questions in Discussions from your own documentation, and merges safe dependency updates once all checks pass.
+**A free GitHub App that looks after your repositories.** It triages issues, reviews pull requests for bugs, scans your code each week, answers questions from your docs and merges safe dependency updates. It runs on GitHub Actions, so there's no server to keep online, and it uses free AI models.
 
 [![CI](https://github.com/Shahrukhalid/nexonic-sentinel/actions/workflows/ci.yml/badge.svg)](https://github.com/Shahrukhalid/nexonic-sentinel/actions/workflows/ci.yml)
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue)
 
+**[Install Nexonic Sentinel](https://github.com/apps/nexonic-sentinel/installations/new)** on the repositories you choose. It starts in a safe mode: nothing is sent to an AI model and nothing is merged until you switch it on (see [Settings for your repository](#settings-for-your-repository)).
+
 ## What it does
 
-| Where | What happens |
-|---|---|
-| New issues | Adds matching labels (`bug`, `enhancement`, `question`, `documentation`) when they exist, thanks the author, asks for reproduction details on short bug reports, links the docs that look relevant, and says the maintainer will take a look. Possible security reports are pointed to private vulnerability reporting. |
-| Discussions (Q&A) | Answers from the repository's README and `docs/` only, with a free OpenRouter model, and lists its sources. If the docs don't clearly answer it, or the topic is security or legal, it says so and leaves it for the maintainer instead of guessing. Ideas get a thank-you. |
-| Pull requests | Welcomes first-time contributors. Merges Dependabot patch and minor updates when every check has passed; asks Dependabot to rebase when a branch is behind; flags major updates for a human. |
-| Weekly | A digest issue in this repository every Monday: stars, open issues and PRs per repository, and everything waiting on the owner. |
+| Where | What happens | Needs `ai = true` |
+|---|---|---|
+| New issues | Adds matching labels (`bug`, `enhancement`, `question`, `documentation`) when they exist, thanks the author, asks for reproduction details on short bug reports and links the docs that look relevant. Possible security reports are pointed to private vulnerability reporting. | no |
+| Pull requests | Welcomes first-time contributors. **Bug review:** on every new commit it reads the changed lines and posts the concrete bugs it finds (file, line, why, suggested fix), plus any failing checks. It only comments: it never approves, blocks or pushes code. | review only |
+| Weekly code health | Reads a different few source files each week and opens one "Code health report" issue when it finds likely bugs. Findings already reported are never repeated. | yes |
+| Discussions (Q&A) | Answers from your README and `docs/` only, lists its sources, and says so when the docs don't cover it instead of guessing. Ideas get a thank-you. | AI answers only |
+| Dependabot | Merges the update types you allow once every check has passed, asks Dependabot to rebase when a branch is behind, and flags the rest. | no |
 
-It never accepts its own answers, never closes or deletes anything, never approves workflows from forks, and replies at most once per thread.
+Every finding is checked against the real diff or file before it is posted, so a model cannot point at lines that don't exist. Model output is stripped of @mentions and hidden HTML. The bot never runs code from your repository.
 
-## Who it acts as
+## Settings for your repository
 
-Everything is done by the GitHub App, so it appears as **nexonic-sentinel[bot]** with a clear "bot" label. It does not use the owner's account or personal token, so nothing it writes can be mistaken for something the owner wrote, and it keeps working when the owner is signed out.
+Add `.github/nexonic-sentinel.toml` to a repository to change what the bot does there:
 
-## Setup
+```toml
+enabled = true      # false = Nexonic Sentinel leaves this repository alone
+triage = true       # label new issues and point to relevant docs
+welcome = true      # welcome first-time contributors
+discussions = true  # reply in Q&A discussions (AI answers need ai = true)
+ai = false          # allow sending issue, discussion and code text to free OpenRouter models
+pr_review = true    # AI bug review of pull requests (needs ai = true)
+code_scan = true    # weekly AI code health report (needs ai = true)
+dependabot = []     # Dependabot updates to merge once all checks pass, e.g. ["patch", "minor"]
+```
 
-1. **Create the GitHub App** (Settings → Developer settings → GitHub Apps → New): webhook off; repository permissions *Contents: read & write*, *Issues: read & write*, *Pull requests: read & write*, *Discussions: read & write*, *Checks: read*, *Commit statuses: read*, *Metadata: read*. Install it on the repositories it should manage.
-2. In this repository, add:
-   - variable `SENTINEL_CLIENT_ID`: the App's Client ID;
-   - secret `SENTINEL_PRIVATE_KEY`: a private key generated on the App's page (the whole `.pem` file);
-   - secret `OPENROUTER_API_KEY` (optional): a free [OpenRouter](https://openrouter.ai/keys) key for Discussion answers. Without it the bot still triages and flags questions.
-3. Run **Actions → Sentinel → Run workflow** with *dry run* ticked, read the summary, then run it normally. After that it runs by itself every 30 minutes.
+Without the file, the defaults are the values shown. To stop the bot on a single thread, add the `bot-off` label, or write `bot-off` in a discussion. Uninstalling the app removes all of its access.
 
-## Settings
+## Privacy and data
 
-Everything lives in [`sentinel.toml`](sentinel.toml): the owner, whether to @mention them (off by default, so comments don't trigger notification emails; anything waiting is listed in the Monday digest), repositories to skip, how far back to look, the per-run limit on AI answers (to stay inside the free 50 requests a day), the free models to try, and which Dependabot updates may be merged. Set `enabled = false` to stop the bot everywhere. Add the `bot-off` label to an issue or PR, or write `bot-off` in a discussion, to stop it on one thread. It ignores the owner's own posts, unless the title or text contains `[sentinel-test]`, which is handy for trying it out.
+- **What it reads:** issues, pull requests, discussions, docs and, when `ai = true`, the code it reviews. Only on repositories you installed it on.
+- **What leaves GitHub:** only when `ai = true`, the text being reviewed or answered is sent to free models on [OpenRouter](https://openrouter.ai/privacy). Free models may log prompts, so don't enable `ai` on repositories with code you can't share.
+- **What is stored:** nothing outside GitHub. Scheduled jobs keep a small ledger issue in this repository with **hashed** repository names, so installations are never revealed. This repository's public Actions logs show details only for its owner's repositories; other installations appear as counts.
+- **Limits:** AI use is capped per run and per day, so one installation can't use up the shared free quota.
+
+See also [SECURITY.md](SECURITY.md).
+
+## Contribution finder (owner only)
+
+For the account that runs the bot, a daily "Contribution shortlist" issue in this repository lists open issues on other projects where maintainers asked for help (`good first issue`, `help wanted`). Each comes with a drafted approach and the files to look at. The bot never comments or opens pull requests on those projects. You decide what to work on and submit it yourself.
+
+## Run your own copy
+
+1. Create a GitHub App: webhook off; repository permissions *Contents: read & write*, *Issues: read & write*, *Pull requests: read & write*, *Discussions: read & write*, *Checks: read*, *Commit statuses: read*, *Metadata: read*. Install it where you want it.
+2. In your fork, add the variable `SENTINEL_CLIENT_ID` (the App's Client ID), the secret `SENTINEL_PRIVATE_KEY` (the whole `.pem`) and, optionally, the secret `OPENROUTER_API_KEY` (a free key from [OpenRouter](https://openrouter.ai/keys)).
+3. Set `owner` and the options in [`sentinel.toml`](sentinel.toml). Then run **Actions → Sentinel → Run workflow** with *dry run* ticked, read the summary, and let the 30-minute schedule take over.
+
+The owner's own repositories use the `[features]` defaults in `sentinel.toml`. `mention_owner = false` keeps comments from sending you notification emails; anything waiting on you is listed in the Monday digest. Set `enabled = false` to stop the bot everywhere.
 
 ## Development
 

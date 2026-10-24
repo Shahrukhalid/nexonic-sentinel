@@ -1,4 +1,5 @@
 # Nexonic Sentinel settings. Changes take effect on the next run.
+# Each repository can also add .github/nexonic-sentinel.toml to override features for itself.
 
 owner = "Shahrukhalid"        # the account the bot works for; its own posts are skipped
 mention_owner = false         # true = @mention the owner in comments (sends a notification email each time)
@@ -6,7 +7,12 @@ enabled = true                # false = the bot does nothing (emergency stop)
 home_repo = "nexonic-sentinel"
 skip_repos = ["Shahrukhalid"] # repositories the bot ignores (profile README)
 lookback_hours = 72           # only new issues, PRs and discussions from this window
-max_llm_calls_per_run = 6     # keeps well inside the free OpenRouter quota (50 requests a day)
+
+# AI budget. Free OpenRouter models allow about 50 requests a day without credits.
+daily_llm_budget = 45
+max_llm_calls_per_run = 10
+public_llm_calls_per_install = 3  # cap per run for accounts other than the owner that opted in to AI
+max_installations = 50
 
 # Free OpenRouter models, tried in order
 models = [
@@ -14,6 +20,31 @@ models = [
   "google/gemma-4-31b-it:free",
   "nvidia/nemotron-3-ultra-550b-a55b:free",
 ]
+
+[features]
+# Defaults for the owner's own repositories. Other accounts start with ai = false and no automatic merges.
+ai = true          # allow sending issue, discussion and code text to the models above
+pr_review = true   # AI bug review of each new pull request commit
+code_scan = true   # weekly code health report (a different set of files each week)
+
+[review]
+min_severity = "medium"   # high | medium | low
+max_files = 30            # larger pull requests are skipped
+max_patch_chars = 30000
+post_when_clean = true    # also post a short "no likely bugs found" review
+
+[scan]
+files_per_week = 4
+min_severity = "medium"
+max_file_bytes = 15000
+
+[contrib]
+# Daily shortlist of open-source issues where maintainers asked for help, posted in the home repository only.
+enabled = true
+languages = ["python", "typescript"]
+min_stars = 30
+max_items = 5
+max_age_days = 30
 
 [automerge]
 # Dependabot updates merged automatically once every check passes. Major updates always wait for you.

@@ -1,4 +1,4 @@
-# Runs Nexonic Sentinel every 30 minutes on every repository the GitHub App is installed on.
+# Runs Nexonic Sentinel every 30 minutes for every account that installed the GitHub App.
 # Needs: repository variable SENTINEL_CLIENT_ID, secret SENTINEL_PRIVATE_KEY, optional secret OPENROUTER_API_KEY.
 name: Sentinel
 
@@ -34,15 +34,11 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install --require-hashes -r requirements.lock
-      - id: app
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          client-id: ${{ vars.SENTINEL_CLIENT_ID }}
-          private-key: ${{ secrets.SENTINEL_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
       - name: Sentinel pass
         env:
-          GITHUB_TOKEN: ${{ steps.app.outputs.token }}
+          # The bot signs in as the GitHub App and serves every account that installed it.
+          SENTINEL_CLIENT_ID: ${{ vars.SENTINEL_CLIENT_ID }}
+          SENTINEL_PRIVATE_KEY: ${{ secrets.SENTINEL_PRIVATE_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           SENTINEL_DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
         run: python -m sentinel ${{ inputs.digest && '--digest' || '' }}
