@@ -1,0 +1,19 @@
+# Nexonic Sentinel settings. Changes take effect on the next run.
+
+owner = "Shahrukhalid"        # mentioned when something needs a human
+enabled = true                # false = the bot does nothing (emergency stop)
+home_repo = "nexonic-sentinel"
+skip_repos = ["Shahrukhalid"] # repositories the bot ignores (profile README)
+lookback_hours = 72           # only new issues, PRs and discussions from this window
+max_llm_calls_per_run = 6     # keeps well inside the free OpenRouter quota (50 requests a day)
+
+# Free OpenRouter models, tried in order
+models = [
+  "nvidia/nemotron-3-super-120b-a12b:free",
+  "google/gemma-4-31b-it:free",
+  "nvidia/nemotron-3-ultra-550b-a55b:free",
+]
+
+[automerge]
+# Dependabot updates merged automatically once every check passes. Major updates always wait for you.
+dependabot = ["patch", "minor"]

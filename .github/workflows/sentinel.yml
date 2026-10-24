@@ -1,0 +1,53 @@
+# Runs Nexonic Sentinel every 30 minutes on every repository the GitHub App is installed on.
+# Needs: repository variable SENTINEL_CLIENT_ID, secret SENTINEL_PRIVATE_KEY, optional secret OPENROUTER_API_KEY.
+name: Sentinel
+
+on:
+  schedule:
+    - cron: "7,37 * * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Only log what would happen
+        type: boolean
+        default: false
+      digest:
+        description: Also post the weekly digest now
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: write # only to keep this schedule from being disabled after 60 days without commits
+
+concurrency:
+  group: sentinel
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - run: pip install --require-hashes -r requirements.lock
+      - id: app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.SENTINEL_CLIENT_ID }}
+          private-key: ${{ secrets.SENTINEL_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+      - name: Sentinel pass
+        env:
+          GITHUB_TOKEN: ${{ steps.app.outputs.token }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          SENTINEL_DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
+        run: python -m sentinel ${{ inputs.digest && '--digest' || '' }}
+      - name: Keep the schedule alive
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/sentinel.yml/enable" || true
