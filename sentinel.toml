@@ -1,6 +1,7 @@
 # Nexonic Sentinel settings. Changes take effect on the next run.
 
-owner = "Shahrukhalid"        # mentioned when something needs a human
+owner = "Shahrukhalid"        # the account the bot works for; its own posts are skipped
+mention_owner = false         # true = @mention the owner in comments (sends a notification email each time)
 enabled = true                # false = the bot does nothing (emergency stop)
 home_repo = "nexonic-sentinel"
 skip_repos = ["Shahrukhalid"] # repositories the bot ignores (profile README)

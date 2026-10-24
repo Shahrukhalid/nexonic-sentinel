@@ -92,7 +92,8 @@ def test_new_issue_gets_labels_and_one_triage_comment():
     comments = [w for w in fake.writes if w[1].endswith("/1/comments")]
     assert len(comments) == 1
     body = comments[0][2]["body"]
-    assert marker("triage") in body and "@alice" in body and "@owner" in body and "docs/FAQ.md" in body
+    assert marker("triage") in body and "@alice" in body and "the maintainer" in body.lower() and "docs/FAQ.md" in body
+    assert "@owner" not in body  # no notification email to the owner by default
     assert "steps" in body  # short bug report: asks for reproduction details
 
 
@@ -167,7 +168,7 @@ def test_major_update_waits_for_owner():
     fake.pulls = [pr(14, "Bump vite from 6.4.5 to 7.0.0")]
     rep = make(fake).run()
     body = [w for w in fake.writes if w[1].endswith("/14/comments")][0][2]["body"]
-    assert "major" in body and "@owner" in body and not any(w[1].endswith("/merge") for w in fake.writes)
+    assert "major" in body and "@owner" not in body and not any(w[1].endswith("/merge") for w in fake.writes)
     assert any("#14" in f for f in rep.flagged)
 
 
@@ -211,7 +212,7 @@ def test_unsure_answer_flags_the_owner_instead():
     fake.discussions = [disc(5, "How do I change the port?")]
     rep = make(fake, llm=fake_llm({"confident": False, "answer": "", "sources": []})).run()
     (_, _, v), = [w for w in fake.writes if w[0] == "GRAPHQL"]
-    assert "flagged this for @owner" in v["body"] and any("#5" in f for f in rep.flagged)
+    assert "flagged this for the maintainer" in v["body"] and any("#5" in f for f in rep.flagged)
 
 
 def test_discussions_skipped_when_owner_replied_or_already_handled_or_sensitive_not_sent_to_llm():
@@ -302,3 +303,21 @@ def test_green_grouped_minor_update_is_merged():
     fake.checks["abc"] = [{"status": "completed", "conclusion": "success"}]
     make(fake).run()
     assert ("PUT", "/repos/owner/app/pulls/5/merge", {"merge_method": "squash", "sha": "abc"}) in fake.writes
+
+
+def test_owner_mention_is_opt_in():
+    fake = FakeGitHub()
+    fake.issues = [issue(1, "App crashes")]
+    Sentinel(GitHub("t", transport=httpx.MockTransport(fake.handler)), {**CFG, "mention_owner": True}, now=NOW).run()
+    body = [w for w in fake.writes if w[1].endswith("/1/comments")][0][2]["body"]
+    assert "@owner will take a look" in body
+
+
+def test_welcome_skips_testing_reminder_when_pr_describes_tests():
+    fake = FakeGitHub()
+    fake.pulls = [{**pr(9, "Add theme", login="newbie", assoc="FIRST_TIME_CONTRIBUTOR"), "body": "Testing: npm test passed"},
+                  {**pr(10, "Fix typo", login="other", assoc="FIRST_TIME_CONTRIBUTOR"), "body": "Small fix"}]
+    make(fake).run()
+    b9 = [w for w in fake.writes if w[1].endswith("/9/comments")][0][2]["body"]
+    b10 = [w for w in fake.writes if w[1].endswith("/10/comments")][0][2]["body"]
+    assert "describe how you tested" not in b9 and "describe how you tested" in b10 and "@owner" not in b9

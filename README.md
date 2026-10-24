@@ -9,8 +9,8 @@
 
 | Where | What happens |
 |---|---|
-| New issues | Adds matching labels (`bug`, `enhancement`, `question`, `documentation`) when they exist, thanks the author, asks for reproduction details on short bug reports, links the docs that look relevant, and mentions the owner. Possible security reports are pointed to private vulnerability reporting. |
-| Discussions (Q&A) | Answers from the repository's README and `docs/` only, with a free OpenRouter model, and lists its sources. If the docs don't clearly answer it, or the topic is security or legal, it says so and mentions the owner instead of guessing. Ideas get a thank-you. |
+| New issues | Adds matching labels (`bug`, `enhancement`, `question`, `documentation`) when they exist, thanks the author, asks for reproduction details on short bug reports, links the docs that look relevant, and says the maintainer will take a look. Possible security reports are pointed to private vulnerability reporting. |
+| Discussions (Q&A) | Answers from the repository's README and `docs/` only, with a free OpenRouter model, and lists its sources. If the docs don't clearly answer it, or the topic is security or legal, it says so and leaves it for the maintainer instead of guessing. Ideas get a thank-you. |
 | Pull requests | Welcomes first-time contributors. Merges Dependabot patch and minor updates when every check has passed; asks Dependabot to rebase when a branch is behind; flags major updates for a human. |
 | Weekly | A digest issue in this repository every Monday: stars, open issues and PRs per repository, and everything waiting on the owner. |
 
@@ -31,7 +31,7 @@ Everything is done by the GitHub App, so it appears as **nexonic-sentinel[bot]**
 
 ## Settings
 
-Everything lives in [`sentinel.toml`](sentinel.toml): the owner to mention, repositories to skip, how far back to look, the per-run limit on AI answers (to stay inside the free 50 requests a day), the free models to try, and which Dependabot updates may be merged. Set `enabled = false` to stop the bot everywhere. Add the `bot-off` label to an issue or PR, or write `bot-off` in a discussion, to stop it on one thread. It ignores the owner's own posts, unless the title or text contains `[sentinel-test]`, which is handy for trying it out.
+Everything lives in [`sentinel.toml`](sentinel.toml): the owner, whether to @mention them (off by default, so comments don't trigger notification emails; anything waiting is listed in the Monday digest), repositories to skip, how far back to look, the per-run limit on AI answers (to stay inside the free 50 requests a day), the free models to try, and which Dependabot updates may be merged. Set `enabled = false` to stop the bot everywhere. Add the `bot-off` label to an issue or PR, or write `bot-off` in a discussion, to stop it on one thread. It ignores the owner's own posts, unless the title or text contains `[sentinel-test]`, which is handy for trying it out.
 
 ## Development
 

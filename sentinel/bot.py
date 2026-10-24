@@ -88,6 +88,10 @@ class Sentinel:
                  now: datetime | None = None) -> None:
         self.gh, self.cfg, self.llm, self.dry = gh, cfg, llm, dry_run
         self.owner = cfg["owner"]
+        # Mentioning the owner sends them a GitHub notification email on every comment; off by default.
+        mention = bool(cfg.get("mention_owner", False))
+        self.them = f"@{self.owner}" if mention else "the maintainer"
+        self.They = f"@{self.owner}" if mention else "The maintainer"
         self.now = now or datetime.now(timezone.utc)
         self.since = self.now - timedelta(hours=int(cfg.get("lookback_hours", 72)))
         self.report = Report()
@@ -163,7 +167,7 @@ class Sentinel:
         if SENSITIVE.search(text):
             lines.append("This looks security-related. If it is a vulnerability, please don't share details publicly: "
                          "use the repository's private vulnerability reporting (see SECURITY.md). "
-                         f"@{self.owner} has been notified.")
+                         f"{self.They} has been notified.")
             self.report.flagged.append(f"{repo['full_name']}#{issue['number']} (possible security report)")
         else:
             if "bug" in [label.lower() for label in labels] and len(issue.get("body") or "") < 200:
@@ -172,7 +176,7 @@ class Sentinel:
             hits = knowledge.best_excerpts(text, self._docs_for(repo), k=3)
             if hits:
                 lines.append("These docs may already cover it:\n" + self._doc_links(repo, [p for p, _ in hits]))
-            lines.append(f"@{self.owner} will take a look.")
+            lines.append(f"{self.They} will take a look.")
         return "\n\n".join(lines) + FOOTER
 
     # ------------------------------------------------------------------ pull requests
@@ -195,10 +199,12 @@ class Sentinel:
         name, n = repo["full_name"], pr["number"]
         if pr.get("author_association") not in NEW_CONTRIBUTOR or self._has_marker(name, n, "welcome"):
             return
+        tested = re.search(r"\btest", pr.get("body") or "", re.I)
         body = (f"{marker('welcome')}Thank you for your first contribution, @{pr['user']['login']}! "
-                f"@{self.owner} will review it soon. Checks for pull requests from forks only start after a maintainer "
-                "approves them, so a short wait is normal. Please make sure the tests pass and describe how you tested "
-                "the change." + FOOTER)
+                f"{self.They} will review it soon. Checks for pull requests from forks only start after a maintainer "
+                "approves them, so a short wait is normal."
+                + ("" if tested else " Please make sure the tests pass and describe how you tested the change.")
+                + FOOTER)
         self._write(f"{name}#{n}: welcome new contributor", self.gh.comment, name, n, body)
         self.report.flagged.append(f"{name}#{n} (new contributor PR to review)")
 
@@ -217,8 +223,8 @@ class Sentinel:
         if kind not in allowed:
             if not self._has_marker(name, n, "major"):
                 self._write(f"{name}#{n}: flag {kind or 'unrecognised'} dependency update for review", self.gh.comment,
-                            name, n, f"{marker('major')}@{self.owner} this is a {kind or 'non-standard'} update, so I "
-                            "won't merge it automatically. Please review the release notes." + FOOTER)
+                            name, n, f"{marker('major')}This is a {kind or 'non-standard'} update, so I won't merge it "
+                            f"automatically; {self.them} will review the release notes." + FOOTER)
             self.report.flagged.append(f"{name}#{n} ({kind or 'unrecognised'} dependency update)")
             return
         detail = self.gh.get(f"/repos/{name}/pulls/{n}")
@@ -267,13 +273,13 @@ class Sentinel:
         who = d["author"]["login"]
         if not d["category"].get("isAnswerable"):
             if d["category"]["name"].lower().startswith("idea"):
-                return (f"{marker('discussion')}Thanks for the idea, @{who}! @{self.owner} reads every suggestion; "
+                return (f"{marker('discussion')}Thanks for the idea, @{who}! {self.They} reads every suggestion; "
                         "a 👍 from others helps show how many people want it." + FOOTER)
             return None
         if SENSITIVE.search(question):
             self.report.flagged.append(f"{repo['full_name']} discussion #{d['number']} (sensitive topic)")
             return (f"{marker('discussion')}Thanks, @{who}. This touches on security or legal matters, so I've left it "
-                    f"for @{self.owner} to answer personally." + FOOTER)
+                    f"for {self.them} to answer personally." + FOOTER)
         excerpts = knowledge.best_excerpts(question, self._docs_for(repo))
         cap = int(self.cfg.get("max_llm_calls_per_run", 6))
         if self.llm is not None and excerpts and self.llm.calls < cap:
@@ -285,10 +291,10 @@ class Sentinel:
             if reply.get("confident"):
                 return (f"{marker('discussion')}Hi @{who}, here's what the project's documentation says:\n\n"
                         f"{reply['answer']}\n\n**Sources**\n{self._doc_links(repo, reply['sources'])}\n\n"
-                        f"If this solves it, please mark it as the answer. @{self.owner} will double-check." + FOOTER)
+                        f"If this solves it, please mark it as the answer. {self.They} will double-check." + FOOTER)
         self.report.flagged.append(f"{repo['full_name']} discussion #{d['number']} (needs an answer)")
         return (f"{marker('discussion')}Thanks for asking, @{who}! I couldn't find a clear answer in the docs, so I've "
-                f"flagged this for @{self.owner}." + FOOTER)
+                f"flagged this for {self.them}." + FOOTER)
 
     # ------------------------------------------------------------------ weekly digest
     def digest(self) -> None:
@@ -314,4 +320,4 @@ class Sentinel:
                 + "\n".join(rows) + "\n\n**Waiting on you this run**\n"
                 + ("\n".join(f"- {f}" for f in self.report.flagged) or "- Nothing") + FOOTER)
         self._write(f"{home}: create {title}", self.gh.request, "POST", f"/repos/{home}/issues",
-                    json={"title": title, "body": f"@{self.owner}\n\n{body}", "labels": ["digest"]})
+                    json={"title": title, "body": body, "labels": ["digest"]})
