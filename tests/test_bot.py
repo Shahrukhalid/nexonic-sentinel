@@ -279,3 +279,24 @@ def test_owner_can_trigger_the_bot_with_the_test_tag():
     assert any(w[1].endswith("/1/comments") for w in fake.writes)
     assert not any(w[1].endswith("/2/comments") for w in fake.writes)
     assert [w[2]["id"] for w in fake.writes if w[0] == "GRAPHQL"] == ["D3"]
+
+
+GROUPED = ("Bumps react and @types/react. These dependencies needed to be updated together.\n"
+           "Updates `react` from 19.0.0 to 19.3.1\n- [Release notes](https://example.com)\n"
+           "Updates `@types/react` from 19.0.3 to 19.3.0\n\nRelease notes\nfrom 1.0.0 to 9.0.0 in some changelog text")
+
+
+def test_grouped_update_reads_versions_from_the_body():
+    assert bump_kind("Bump react and @types/react", GROUPED) == "minor"
+    assert bump_kind("Bump the npm group with 2 updates",
+                     "Updates `a` from 1.2.3 to 1.2.4\nUpdates `b` from 2.0.0 to 3.0.0") == "major"
+    assert bump_kind("Bump things", "no versions here") is None
+
+
+def test_green_grouped_minor_update_is_merged():
+    fake = FakeGitHub()
+    fake.pulls = [{**pr(5, "Bump react and @types/react"), "body": GROUPED}]
+    fake.pull_detail[5] = {"mergeable": True, "mergeable_state": "clean"}
+    fake.checks["abc"] = [{"status": "completed", "conclusion": "success"}]
+    make(fake).run()
+    assert ("PUT", "/repos/owner/app/pulls/5/merge", {"merge_method": "squash", "sha": "abc"}) in fake.writes

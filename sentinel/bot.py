@@ -43,10 +43,11 @@ def is_bot(user: dict | None) -> bool:
     return user.get("type") == "Bot" or user.get("__typename") == "Bot" or str(user.get("login", "")).endswith("[bot]")
 
 
-def bump_kind(title: str) -> str | None:
-    m = BUMP.search(title or "")
-    if not m:
-        return None
+RANK = {"patch": 0, "minor": 1, "major": 2}
+BUMP_LINE = re.compile(r"^\s*(?:Updates|Bumps)\b.*$", re.I | re.M)
+
+
+def _one_kind(m: re.Match) -> str | None:
     a, b = tuple(map(int, m.groups()[:3])), tuple(map(int, m.groups()[3:]))
     if b <= a:
         return None
@@ -55,6 +56,19 @@ def bump_kind(title: str) -> str | None:
     if b[1] != a[1]:
         return "minor" if a[0] > 0 else "major"  # 0.x minor bumps can break
     return "patch"
+
+
+def bump_kind(title: str, body: str = "") -> str | None:
+    """Severity of a Dependabot update. Grouped PRs have no versions in the title, so read the
+    "Updates `x` from A to B" lines in the body and take the biggest jump."""
+    found = list(BUMP.finditer(title or ""))
+    if not found:
+        for line in BUMP_LINE.findall(body or ""):
+            found.extend(BUMP.finditer(line))
+    kinds = [_one_kind(m) for m in found]
+    if not kinds or None in kinds:
+        return None
+    return max(kinds, key=RANK.__getitem__)
 
 
 @dataclass
@@ -197,7 +211,7 @@ class Sentinel:
 
     def _dependabot(self, repo: dict, pr: dict) -> None:
         name, n = repo["full_name"], pr["number"]
-        kind = bump_kind(pr.get("title", ""))
+        kind = bump_kind(pr.get("title", ""), pr.get("body") or "")
         allowed = set(self.cfg.get("automerge", {}).get("dependabot", ["patch", "minor"]))
         if kind not in allowed:
             if not self._has_marker(name, n, "major"):
