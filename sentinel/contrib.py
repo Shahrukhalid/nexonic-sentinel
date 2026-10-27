@@ -217,7 +217,7 @@ def render(picks: list[dict[str, Any]], day: str) -> str:
                 if fx["test"]:
                     out.append(f"Suggested test:\n```\n{fx['test']}\n```")
         out.append("")
-    out.append("<sub>AI drafts. Fixes are checked to apply to the real files (and to parse, for Python) but have "
-               "not been run. Read the code, run the project's tests, and submit only what you have verified "
+    out.append("<sub>Automated drafts: checked to apply to the real files (and to parse, for Python) but "
+               "not run. Read the code, run the project's tests, and submit only what you have verified "
                "yourself.</sub>")
     return "\n".join(out)
