@@ -51,7 +51,8 @@ def is_bot(user: dict | None) -> bool:
 def bot_marked(comments: list[dict], kind: str, author_key: str = "user") -> bool:
     """True when a bot already left this marker. Markers typed by people are ignored, so nobody can
     silence a warning (for example on a major dependency update) by pasting the hidden comment."""
-    return any(marker(kind) in (c.get("body") or "") and is_bot(c.get(author_key)) for c in comments)
+    return any(marker(kind) in (c.get("body") or "") and bool(c.get(author_key)) and is_bot(c.get(author_key))
+               for c in comments)
 
 
 RANK = {"patch": 0, "minor": 1, "major": 2}
@@ -312,12 +313,29 @@ class Sentinel:
                     self.gh.request, "POST", f"/repos/{name}/pulls/{n}/reviews",
                     json={"commit_id": sha, "event": "COMMENT", "body": body})
 
+    def _check_runs_full(self, repo: str, sha: str) -> tuple[list[dict], bool]:
+        """Check runs plus whether the list is complete (fetched count matches GitHub's total_count, cap 500)."""
+        out: list[dict] = []
+        total: Any = None
+        page = 1
+        while len(out) < 500:
+            data = self.gh.get(f"/repos/{repo}/commits/{sha}/check-runs", per_page=100, page=page)
+            if total is None:
+                total = data.get("total_count")
+            items = data.get("check_runs", [])
+            out.extend(items)
+            if len(items) < 100:
+                break
+            page += 1
+        complete = isinstance(total, int) and not isinstance(total, bool) and len(out) == total
+        return out[:500], complete
+
     def _check_runs(self, repo: str, sha: str) -> list[dict]:
-        return self.gh.paged(f"/repos/{repo}/commits/{sha}/check-runs", key="check_runs", limit=500)
+        return self._check_runs_full(repo, sha)[0]
 
     def _checks_green(self, repo: str, sha: str) -> bool:
-        runs = self._check_runs(repo, sha)
-        if not runs:
+        runs, complete = self._check_runs_full(repo, sha)
+        if not runs or not complete:
             return False
         ok = all(r["status"] == "completed" and r["conclusion"] in ("success", "skipped", "neutral") for r in runs)
         status = self.gh.get(f"/repos/{repo}/commits/{sha}/status")
@@ -362,12 +380,26 @@ class Sentinel:
             return False
         if (head.get("repo") or {}).get("full_name") != name or head.get("sha") != pr["head"]["sha"]:
             return False
+        count = detail.get("commits")
+        if not isinstance(count, int) or isinstance(count, bool) or not 0 < count <= 250:
+            return False  # unknown or beyond what the commits endpoint can list: cannot vouch for every commit
         commits = self.gh.paged(f"/repos/{name}/pulls/{n}/commits", limit=250)
-        return bool(commits) and all((c.get("author") or {}).get("login") == DEPENDABOT for c in commits)
+        if len(commits) != count or commits[-1].get("sha") != pr["head"]["sha"]:
+            return False
+        return all(self._dependabot_commit(c) for c in commits)
+
+    @staticmethod
+    def _dependabot_commit(c: dict) -> bool:
+        """Author attribution alone can be faked with an email address, so also require a verified signature made by
+        GitHub itself (web-flow) or Dependabot."""
+        verification = (c.get("commit") or {}).get("verification") or {}
+        return ((c.get("author") or {}).get("login") == DEPENDABOT
+                and (c.get("committer") or {}).get("login") in {"web-flow", DEPENDABOT}
+                and verification.get("verified") is True)
 
     def _checks_done(self, repo: str, sha: str) -> bool:
-        runs = self._check_runs(repo, sha)
-        return bool(runs) and all(r["status"] == "completed" for r in runs)
+        runs, complete = self._check_runs_full(repo, sha)
+        return complete and bool(runs) and all(r["status"] == "completed" for r in runs)
 
     # ------------------------------------------------------------------ discussions
     def discussions(self, repo: dict) -> None:

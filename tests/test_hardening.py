@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import httpx
+import pytest
 
 from sentinel import github as gh_module
 from sentinel import settings as repo_settings
 from sentinel.bot import marker
-from sentinel.github import GitHub
-from tests.test_bot import FakeGitHub, disc, fake_llm, make, pr
+from sentinel.github import GitHub, GitHubError
+from tests.test_bot import FakeGitHub, dep_commit, disc, fake_llm, make, pr
 
 
 # ------------------------------------------------------------------ settings (issue #7)
@@ -31,7 +32,7 @@ def _green(fake: FakeGitHub, n: int = 13) -> None:
 def test_dependabot_pr_with_a_commit_from_someone_else_is_not_merged():
     fake = FakeGitHub()
     _green(fake)
-    fake.pr_commits[13] = [{"sha": "a", "author": {"login": "dependabot[bot]"}}, {"sha": "abc", "author": {"login": "mallory"}}]
+    fake.pr_commits[13] = [dep_commit("a"), dep_commit("abc", author="mallory")]
     rep = make(fake).run()
     assert not any(w[1].endswith("/merge") for w in fake.writes)
     assert any("#13" in f and "someone else" in f for f in rep.flagged)
@@ -148,3 +149,200 @@ def test_raw_file_quotes_the_path():
 
     GitHub("t", transport=httpx.MockTransport(handler)).raw_file("o/r", "docs/a #1.md")
     assert seen == ["/repos/o/r/contents/docs/a%20%231.md"]
+
+
+def _merged(fake: FakeGitHub) -> bool:
+    return any(w[1].endswith("/merge") for w in fake.writes)
+
+
+def test_green_dependabot_pr_with_verified_commits_still_merges():
+    fake = FakeGitHub()
+    _green(fake)
+    fake.pr_commits[13] = [dep_commit("a"), dep_commit("abc", committer="dependabot[bot]")]
+    make(fake).run()
+    assert _merged(fake)
+
+
+# ------------------------------------------------------------------ review round: fail closed
+def test_truncated_check_run_list_is_never_green():
+    fake = FakeGitHub()
+    _green(fake)
+    original = fake.handler
+
+    def capped(req: httpx.Request) -> httpx.Response:
+        if req.url.path.endswith("/check-runs"):
+            page = int(req.url.params.get("page", "1"))
+            return httpx.Response(200, json={"total_count": 501, "check_runs": [
+                {"status": "completed", "conclusion": "success"}] * 100 if page <= 5 else []})
+        return original(req)
+
+    fake.handler = capped  # type: ignore[method-assign]
+    make(fake).run()
+    assert not _merged(fake)
+
+
+def test_check_runs_without_total_count_are_not_trusted():
+    fake = FakeGitHub()
+    _green(fake)
+    original = fake.handler
+
+    def no_total(req: httpx.Request) -> httpx.Response:
+        if req.url.path.endswith("/check-runs"):
+            return httpx.Response(200, json={"check_runs": fake.checks["abc"]})
+        return original(req)
+
+    fake.handler = no_total  # type: ignore[method-assign]
+    make(fake).run()
+    assert not _merged(fake)
+
+
+def test_commit_count_mismatch_or_wrong_last_commit_is_not_merged():
+    fake = FakeGitHub()
+    _green(fake)
+    fake.pull_detail[13]["commits"] = 300  # more than the endpoint can list
+    make(fake).run()
+    assert not _merged(fake)
+
+    fake = FakeGitHub()
+    _green(fake)
+    fake.pull_detail[13]["commits"] = 2  # API listed fewer commits than the PR has
+    make(fake).run()
+    assert not _merged(fake)
+
+    fake = FakeGitHub()
+    _green(fake)
+    fake.pr_commits[13] = [dep_commit("zzz")]  # history does not end at the head sha
+    make(fake).run()
+    assert not _merged(fake)
+
+    fake = FakeGitHub()
+    _green(fake)
+    original = fake.handler
+
+    def no_count(req: httpx.Request) -> httpx.Response:
+        r = original(req)
+        if req.url.path == "/repos/owner/app/pulls/13":
+            body = r.json()
+            body.pop("commits")
+            return httpx.Response(200, json=body)
+        return r
+
+    fake.handler = no_count  # type: ignore[method-assign]
+    make(fake).run()
+    assert not _merged(fake)
+
+
+def test_spoofed_author_or_unverified_commit_is_not_merged():
+    for commit in (dep_commit(verified=False), dep_commit(committer="mallory"),
+                   {"sha": "abc", "author": {"login": "dependabot[bot]"}, "committer": {"login": "web-flow"}},
+                   {**dep_commit(), "commit": {"verification": {"verified": "true"}}}):
+        fake = FakeGitHub()
+        _green(fake)
+        fake.pr_commits[13] = [commit]
+        make(fake).run()
+        assert not _merged(fake), commit
+
+
+def test_raw_file_returns_none_only_for_404():
+    def client(status: int) -> GitHub:
+        return GitHub("t", transport=httpx.MockTransport(lambda req: httpx.Response(status, text="x")))
+
+    assert client(404).raw_file("o/r", "a") is None
+    for status in (403, 429, 500):
+        with pytest.raises(GitHubError):
+            client(status).raw_file("o/r", "a")
+
+
+def test_unreadable_settings_skip_the_repository():
+    fake = FakeGitHub()
+    _green(fake)
+    original = fake.handler
+
+    def limited(req: httpx.Request) -> httpx.Response:
+        if req.url.path.endswith("nexonic-sentinel.toml"):
+            return httpx.Response(429, text="slow down")
+        return original(req)
+
+    fake.handler = limited  # type: ignore[method-assign]
+    rep = make(fake).run()
+    assert not _merged(fake) and any("settings" in e for e in rep.errors)
+
+
+def test_bot_marker_needs_a_present_bot_author():
+    from sentinel.bot import bot_marked
+    bot = {"login": "nexonic-sentinel[bot]", "type": "Bot"}
+    assert bot_marked([{"body": marker("triage"), "user": bot}], "triage")
+    for missing in (None, {}):
+        assert not bot_marked([{"body": marker("triage"), "user": missing}], "triage")
+    assert not bot_marked([{"body": marker("triage")}], "triage")
+    assert not bot_marked([{"body": marker("discussion"), "author": None}], "discussion", author_key="author")
+
+
+def test_missing_author_marker_does_not_skip_triage():
+    fake = FakeGitHub()
+    fake.issues = [{"number": 2, "title": "App crashes", "body": "Traceback", "user": {"login": "a", "type": "User"},
+                    "created_at": "2026-10-25T10:00:00Z", "labels": []}]
+    fake.comments[2] = [{"body": marker("triage"), "user": None}]
+    make(fake).run()
+    assert any(w[1].endswith("/2/comments") for w in fake.writes)
+
+
+def _flaky(monkeypatch, exc: Exception, method: str, path: str = "/x", **kw):
+    monkeypatch.setattr(gh_module.time, "sleep", lambda s: None)
+    calls = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        calls.append(req)
+        if len(calls) == 1:
+            raise exc
+        return httpx.Response(200, json={"ok": True})
+
+    client = GitHub("t", transport=httpx.MockTransport(handler))
+    try:
+        client.request(method, path, **kw)
+        failed = False
+    except GitHubError:
+        failed = True
+    return calls, failed
+
+
+def test_writes_are_not_replayed_after_an_ambiguous_timeout(monkeypatch):
+    for method in ("POST", "PATCH", "PUT", "DELETE"):
+        calls, failed = _flaky(monkeypatch, httpx.ReadTimeout("slow"), method, json={})
+        assert len(calls) == 1 and failed, method
+
+
+def test_graphql_mutation_is_not_replayed_but_query_is(monkeypatch):
+    monkeypatch.setattr(gh_module.time, "sleep", lambda s: None)
+    calls = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        calls.append(req)
+        if len(calls) == 1:
+            raise httpx.ReadTimeout("slow")
+        return httpx.Response(200, json={"data": {"ok": 1}})
+
+    client = GitHub("t", transport=httpx.MockTransport(handler))
+    with pytest.raises(GitHubError):
+        client.discussion_comment("D1", "hi")
+    assert len(calls) == 1
+    calls.clear()
+    assert client.graphql("query{viewer{login}}") == {"ok": 1} and len(calls) == 2
+
+
+def test_reads_and_never_sent_writes_are_still_retried(monkeypatch):
+    calls, failed = _flaky(monkeypatch, httpx.ReadTimeout("slow"), "GET")
+    assert len(calls) == 2 and not failed
+    calls, failed = _flaky(monkeypatch, httpx.ConnectError("refused"), "POST", json={})
+    assert len(calls) == 2 and not failed
+    calls, failed = _flaky(monkeypatch, httpx.ConnectTimeout("slow"), "PUT", json={})
+    assert len(calls) == 2 and not failed
+
+
+def test_malformed_dependabot_arrays_disable_automerge():
+    for bad in ([["patch"]], [{"kind": "patch"}], ["patch", 1], "patch"):
+        out = repo_settings.home_defaults({"automerge": {"dependabot": bad}})
+        assert out["dependabot"] == [], bad
+    base = {**repo_settings.PUBLIC_DEFAULTS, "dependabot": ["patch", "minor"]}
+    assert repo_settings.parse("dependabot = [[\"patch\"]]", base)["dependabot"] == []
+    assert repo_settings.parse("dependabot = [\"patch\"]", base)["dependabot"] == ["patch"]
