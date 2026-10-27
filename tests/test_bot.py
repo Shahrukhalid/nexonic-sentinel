@@ -44,6 +44,11 @@ class FakeGitHub:
         self.ext_repos: dict[str, dict] = {}
         self.home_issues: list[dict] = []
         self.ext_files: dict[str, str] = {}
+        self.ext_timeline: dict[str, list[dict]] = {}
+        self.ext_comments: dict[str, list[dict]] = {}
+        self.ext_search_repos: list[dict] = []
+        self.ext_readmes: dict[str, str] = {}
+        self.disc_search: list[dict] = []
         self.files = {"README.md": "# App\n\n## Install\n\nRun `pip install app` then `app serve --port 8600`.\n",
                       "docs/FAQ.md": "# FAQ\n\n## Change the port\n\nSet APP_PORT=9000 in .env to change the port.\n"}
 
@@ -57,6 +62,8 @@ class FakeGitHub:
             if "mutation" in body["query"]:
                 self.writes.append(("GRAPHQL", "addDiscussionComment", body["variables"]))
                 return httpx.Response(200, json={"data": {"addDiscussionComment": {"comment": {"id": "c"}}}})
+            if "search(" in body["query"]:
+                return httpx.Response(200, json={"data": {"search": {"nodes": self.disc_search}}})
             return httpx.Response(200, json={"data": {"repository": {
                 "hasDiscussionsEnabled": True, "discussions": {"nodes": self.discussions}}}})
         if path == "/installation/repositories":
@@ -86,6 +93,14 @@ class FakeGitHub:
             return httpx.Response(200, json={**detail, **self.pull_detail[n]})
         if path == "/repos/owner/app/commits/main":
             return httpx.Response(200, json={"sha": "headsha0000000"})
+        if path == "/search/repositories":
+            return httpx.Response(200, json={"items": self.ext_search_repos})
+        if path.endswith("/readme") and path[len("/repos/"):-len("/readme")] in self.ext_readmes:
+            return httpx.Response(200, text=self.ext_readmes[path[len("/repos/"):-len("/readme")]])
+        if path.endswith("/timeline"):
+            return httpx.Response(200, json=self.ext_timeline.get(path, []))
+        if path.endswith("/comments") and not path.startswith("/repos/owner/app/"):
+            return httpx.Response(200, json=self.ext_comments.get(path, []))
         if path == "/search/issues":
             return httpx.Response(200, json={"items": self.search})
         if path in {f"/repos/{k}" for k in self.ext_repos}:
