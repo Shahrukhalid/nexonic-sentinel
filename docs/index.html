@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Nexonic Sentinel: Free GitHub Maintainer Bot for Issues and PRs</title>
+<meta name="description" content="Free, open-source GitHub App and maintainer bot: triages issues, reviews pull requests for bugs, answers Discussions from your docs and merges safe Dependabot updates. Runs on GitHub Actions.">
+<meta name="keywords" content="GitHub bot, GitHub App, maintainer bot, issue triage, pull request review, GitHub Discussions, Dependabot auto-merge, GitHub Actions, community management">
+<meta name="author" content="Shahrukh Khalid">
+<meta name="robots" content="index,follow,max-image-preview:large">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#0f7a4d">
+<link rel="canonical" href="https://shahrukhalid.github.io/nexonic-sentinel/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Nexonic Sentinel">
+<meta property="og:title" content="Nexonic Sentinel: Free GitHub Maintainer Bot for Issues and PRs">
+<meta property="og:description" content="Free, open-source GitHub App and maintainer bot: triages issues, reviews pull requests for bugs, answers Discussions from your docs and merges safe Dependabot updates. Runs on GitHub Actions.">
+<meta property="og:url" content="https://shahrukhalid.github.io/nexonic-sentinel/">
+<meta property="og:locale" content="en_US">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Nexonic Sentinel: Free GitHub Maintainer Bot for Issues and PRs">
+<meta name="twitter:description" content="Free, open-source GitHub App and maintainer bot: triages issues, reviews pull requests for bugs, answers Discussions from your docs and merges safe Dependabot updates. Runs on GitHub Actions.">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "SoftwareApplication", "name": "Nexonic Sentinel", "url": "https://shahrukhalid.github.io/nexonic-sentinel/", "description": "Free, open-source GitHub App and maintainer bot: triages issues, reviews pull requests for bugs, answers Discussions from your docs and merges safe Dependabot updates. Runs on GitHub Actions.", "applicationCategory": "DeveloperApplication", "operatingSystem": "GitHub", "programmingLanguage": "Python", "license": "https://github.com/Shahrukhalid/nexonic-sentinel/blob/main/LICENSE", "codeRepository": "https://github.com/Shahrukhalid/nexonic-sentinel", "isAccessibleForFree": true, "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"}, "author": {"@type": "Person", "name": "Shahrukh Khalid", "url": "https://github.com/Shahrukhalid"}}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "What is Nexonic Sentinel?", "acceptedAnswer": {"@type": "Answer", "text": "A free GitHub App and maintainer bot that triages issues, reviews pull requests for bugs, runs a weekly code health scan, answers Discussions from your docs and merges safe Dependabot updates."}}, {"@type": "Question", "name": "Do I need a server?", "acceptedAnswer": {"@type": "Answer", "text": "No. It runs on GitHub Actions."}}, {"@type": "Question", "name": "Is my code sent to an AI model?", "acceptedAnswer": {"@type": "Answer", "text": "Not by default. Nothing is sent until you set ai = true. Then the text being reviewed or answered goes to free OpenRouter models, which may log prompts, so do not enable it on repositories with code you cannot share."}}, {"@type": "Question", "name": "Will it approve or push code?", "acceptedAnswer": {"@type": "Answer", "text": "No. Pull request review only comments; it never approves, blocks or pushes code, and it never runs code from your repository."}}, {"@type": "Question", "name": "How does the Dependabot merging stay safe?", "acceptedAnswer": {"@type": "Answer", "text": "It only merges pull requests opened by dependabot[bot] from a branch of the same repository, with every commit authored by Dependabot, once every check has passed and the update type is one you allowed."}}, {"@type": "Question", "name": "How do I turn it off?", "acceptedAnswer": {"@type": "Answer", "text": "Set enabled = false in .github/nexonic-sentinel.toml, add the bot-off label to a single thread, or uninstall the app."}}, {"@type": "Question", "name": "What licence is it under?", "acceptedAnswer": {"@type": "Answer", "text": "MIT."}}]}</script>
+<style>
+:root{--bg:#fff;--fg:#1b1f24;--mut:#57606a;--card:#f6f8fa;--bd:#d0d7de;--ac:#0f7a4d;--acfg:#fff;--link:#0f7a4d}
+@media (prefers-color-scheme:dark){:root{--bg:#0d1117;--fg:#e6edf3;--mut:#9da7b3;--card:#161b22;--bd:#30363d;--ac:#3ddc97;--acfg:#0d1117;--link:#3ddc97}}
+*{box-sizing:border-box}html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+a{color:var(--link)}a:focus-visible,summary:focus-visible{outline:3px solid var(--ac);outline-offset:2px}
+.skip{position:absolute;left:-999px}.skip:focus{left:8px;top:8px;background:var(--bg);padding:8px;z-index:9}
+.wrap{max-width:60rem;margin:0 auto;padding:0 16px}
+header.top{border-bottom:1px solid var(--bd)}header.top .wrap{display:flex;flex-wrap:wrap;gap:8px 20px;align-items:center;padding-top:12px;padding-bottom:12px}
+header.top strong{margin-right:auto}nav a{margin-right:14px;text-decoration:none}
+.hero{padding:48px 0 24px}h1{font-size:clamp(1.8rem,5vw,2.75rem);line-height:1.15;margin:0 0 12px}
+.lead{font-size:1.15rem;color:var(--mut);margin:0 0 20px}
+.btn{display:inline-block;padding:10px 18px;border-radius:8px;background:var(--ac);color:var(--acfg);font-weight:600;text-decoration:none;margin:0 8px 8px 0}
+.btn.alt{background:transparent;color:var(--link);border:1px solid var(--bd)}
+h2{margin:40px 0 12px;font-size:1.5rem}h3{margin:0 0 6px;font-size:1.05rem}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(15rem,1fr));gap:14px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:14px 16px}.card p{margin:0;color:var(--mut)}
+.notice{border-left:4px solid var(--ac);background:var(--card);padding:12px 16px;border-radius:6px;margin:16px 0}
+pre{background:var(--card);border:1px solid var(--bd);border-radius:8px;padding:12px;overflow-x:auto;font-size:.9rem}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+img{max-width:100%;height:auto;border-radius:8px;border:1px solid var(--bd)}
+details{background:var(--card);border:1px solid var(--bd);border-radius:8px;padding:10px 14px;margin:8px 0}summary{cursor:pointer;font-weight:600}details p{margin:8px 0 0}
+ul.l{padding-left:1.2rem}ul.plain{list-style:none;padding:0;margin:0}ul.plain li{margin:6px 0}
+footer{border-top:1px solid var(--bd);margin-top:48px;padding:24px 0 40px;color:var(--mut);font-size:.95rem}
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="top"><div class="wrap"><strong>Nexonic Sentinel</strong><nav aria-label="Main"><a href="#features">Features</a><a href="#quick-start">Quick start</a><a href="#faq">FAQ</a><a href="https://github.com/Shahrukhalid/nexonic-sentinel">GitHub</a></nav></div></header>
+<main id="main"><div class="wrap">
+<section class="hero"><h1>Free GitHub maintainer bot for issue triage, PR review and Dependabot merges</h1><p class="lead">A free GitHub App that looks after your repositories. Runs on GitHub Actions.</p><p>
+<a class="btn" href="https://github.com/apps/nexonic-sentinel/installations/new">Install the GitHub App</a>
+<a class="btn alt" href="https://github.com/Shahrukhalid/nexonic-sentinel">View on GitHub</a>
+<a class="btn alt" href="https://github.com/Shahrukhalid/nexonic-sentinel/releases">Releases</a></p></section>
+<section aria-labelledby="what"><h2 id="what">What it is</h2>
+<p>Nexonic Sentinel is a free GitHub App that triages issues, reviews pull requests for bugs, scans your code each week, answers questions from your docs and merges safe dependency updates. It runs on GitHub Actions, so there is no server to keep online, and it uses free AI models.</p>
+<p>It starts in a safe mode: nothing is sent to an AI model and nothing is merged until you switch it on in a settings file.</p>
+</section>
+<section aria-labelledby="features"><h2 id="features">Features</h2><div class="grid">
+<div class="card"><h3>Issue triage</h3><p>Adds matching labels when they exist, thanks the author, asks for reproduction details on short bug reports and links relevant docs. Possible security reports are pointed to private vulnerability reporting.</p></div>
+<div class="card"><h3>Pull request bug review</h3><p>On every new commit it reads the changed lines and posts concrete bugs it finds (file, line, why, suggested fix). It only comments: it never approves, blocks or pushes code. Needs ai = true.</p></div>
+<div class="card"><h3>Weekly code health report</h3><p>Reads a few different source files each week and opens one report issue when it finds likely bugs. Needs ai = true.</p></div>
+<div class="card"><h3>Discussions Q&amp;A</h3><p>Answers from your README and docs/ only, lists its sources and says so when the docs do not cover a question.</p></div>
+<div class="card"><h3>Dependabot merges</h3><p>Merges the update types you allow once every check has passed, from Dependabot-authored branches of the same repository only.</p></div>
+<div class="card"><h3>Welcomes contributors</h3><p>Greets first-time contributors on pull requests.</p></div>
+</div></section>
+<section aria-labelledby="privacy"><h2 id="privacy">Privacy and safety</h2><ul class="l">
+<li>It reads issues, pull requests, discussions and docs only on repositories you install it on.</li>
+<li>Text leaves GitHub only when ai = true, and goes to free OpenRouter models, which may log prompts.</li>
+<li>Findings are checked against the real diff or file before posting.</li>
+<li>Model output is stripped of @mentions and hidden HTML; issue text is treated as untrusted data.</li>
+<li>The model only writes comment text. It cannot merge, label or call any API, and the bot never runs code from your repository.</li>
+<li>Uninstalling the app removes all of its access.</li>
+</ul></section>
+<section aria-labelledby="quick-start"><h2 id="quick-start">Quick start</h2>
+<p>Install the app on the repositories you choose, then optionally add .github/nexonic-sentinel.toml to change what it does:</p>
+<h3>Settings file</h3><pre><code>enabled = true
+triage = true
+welcome = true
+discussions = true
+ai = false          # allow sending text to free OpenRouter models
+pr_review = true    # needs ai = true
+code_scan = true    # needs ai = true
+dependabot = []     # e.g. [&quot;patch&quot;, &quot;minor&quot;]</code></pre>
+<p>Without the file, these are the defaults. To stop the bot on one thread, add the bot-off label. You can also run your own copy: create a GitHub App, add the secrets to your fork and set options in sentinel.toml.</p></section>
+<section aria-labelledby="faq"><h2 id="faq">Frequently asked questions</h2>
+<details><summary>What is Nexonic Sentinel?</summary><p>A free GitHub App and maintainer bot that triages issues, reviews pull requests for bugs, runs a weekly code health scan, answers Discussions from your docs and merges safe Dependabot updates.</p></details>
+<details><summary>Do I need a server?</summary><p>No. It runs on GitHub Actions.</p></details>
+<details><summary>Is my code sent to an AI model?</summary><p>Not by default. Nothing is sent until you set ai = true. Then the text being reviewed or answered goes to free OpenRouter models, which may log prompts, so do not enable it on repositories with code you cannot share.</p></details>
+<details><summary>Will it approve or push code?</summary><p>No. Pull request review only comments; it never approves, blocks or pushes code, and it never runs code from your repository.</p></details>
+<details><summary>How does the Dependabot merging stay safe?</summary><p>It only merges pull requests opened by dependabot[bot] from a branch of the same repository, with every commit authored by Dependabot, once every check has passed and the update type is one you allowed.</p></details>
+<details><summary>How do I turn it off?</summary><p>Set enabled = false in .github/nexonic-sentinel.toml, add the bot-off label to a single thread, or uninstall the app.</p></details>
+<details><summary>What licence is it under?</summary><p>MIT.</p></details>
+</section>
+<section aria-labelledby="links"><h2 id="links">Project links</h2><ul class="plain">
+<li><a href="https://github.com/Shahrukhalid/nexonic-sentinel">Source code on GitHub</a></li><li><a href="https://github.com/Shahrukhalid/nexonic-sentinel/releases">Releases</a></li><li><a href="https://github.com/Shahrukhalid/nexonic-sentinel/issues">Issues and feature requests</a></li>
+</ul></section>
+<section aria-labelledby="more"><h2 id="more">More projects by Shahrukh Khalid</h2><div class="grid">
+<div class="card"><h3><a href="https://github.com/Shahrukhalid/stark-os">stark-os</a></h3><p>Self-hosted multi-agent social media manager; every post needs your approval.</p></div>
+<div class="card"><h3><a href="https://github.com/Shahrukhalid/verilive">verilive</a></h3><p>In-browser deepfake check for video calls; video never leaves your device.</p></div>
+<div class="card"><h3><a href="https://github.com/Shahrukhalid/nexonic-iptv">nexonic-iptv</a></h3><p>Free IPTV M3U playlists of legal, officially free live TV channels.</p></div>
+<div class="card"><h3><a href="https://github.com/Shahrukhalid/nexonic-iptv-v2">nexonic-iptv-v2</a></h3><p>Self-hosted IPTV player and Xtream Codes server for free, legal TV.</p></div>
+<div class="card"><h3><a href="https://github.com/Shahrukhalid/facevision-ai">facevision-ai</a></h3><p>Local, consent-based face detection, recognition and anonymisation.</p></div>
+<div class="card"><h3><a href="https://github.com/Shahrukhalid/morphlive">morphlive</a></h3><p>Experimental local camera and voice-effects prototype (goal not achieved).</p></div>
+</div></section></div></main>
+<footer><div class="wrap"><p>Free and open source under the MIT licence.</p><p>By <a href="https://github.com/Shahrukhalid">Shahrukhalid</a>. <a href="https://github.com/Shahrukhalid/nexonic-sentinel">Source on GitHub</a>.</p></div></footer>
+</body>
+</html>
