@@ -181,8 +181,8 @@ class Sentinel:
             for step in steps:
                 try:
                     step(repo)
-                except LLMQuotaExceeded as exc:
-                    self.report.flagged.append(f"AI paused: {exc}")
+                except LLMQuotaExceeded:
+                    self.report.flagged.append("Automated reviews paused until the next run (daily limit reached)")
                 except (GitHubError, LLMError) as exc:
                     self._error(repo, step.__name__, exc)
         return self.report
@@ -306,7 +306,8 @@ class Sentinel:
             parts.append("I didn't spot likely bugs in the changed lines.")
         if failing:
             parts.append("**Failing checks:** " + ", ".join(f"[{r['name']}]({r.get('html_url', '')})" for r in failing[:6]))
-        parts.append("<sub>An AI model read only the diff, so treat these as hints and check them against the code. "
+        parts.append("<sub>These findings are automated and based only on the diff, so treat them as hints "
+                     "and check each one against the code. "
                      "Reply here if something is wrong.</sub>")
         body = "\n\n".join(parts) + FOOTER
         self._write(f"{name}#{n}: review {sha[:7]} ({len(findings)} finding{'s' if len(findings) != 1 else ''})",
@@ -502,7 +503,7 @@ class Sentinel:
                 f"({', '.join(f'`{p}`' for p in chosen)}) and found {len(findings)} likely "
                 f"bug{'s' if len(findings) > 1 else ''}. Each week covers a different set of files.\n\n"
                 + review.render(findings, link)
-                + "\n\n<sub>An AI model reviewed these files, so check each finding against the code before fixing it. "
+                + "\n\n<sub>These findings are automated, so check each one against the code before fixing it. "
                   "Close this issue once handled; findings already reported are not repeated.</sub>" + FOOTER)
         self._write(f"{name}: code health report {week} ({len(findings)} findings)", self.gh.request, "POST",
                     f"/repos/{name}/issues", json={"title": f"Code health report {week}", "body": body,
@@ -580,4 +581,4 @@ class Sentinel:
         for old in existing:
             if old.get("state") == "open" and old["title"] != title and is_bot(old.get("user")):
                 self._write(f"{home}#{old['number']}: close previous digest", self.gh.request, "PATCH",
-                            f"/repos/{home}/issues/{old['number']}", json={"state": "closed", "state_reason": "completed"})
+                            f"/repos/{home}#{old['number']}".replace("#", "/issues/"), json={"state": "closed", "state_reason": "completed"})
