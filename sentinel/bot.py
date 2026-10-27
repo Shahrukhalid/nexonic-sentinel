@@ -28,13 +28,14 @@ LABEL_RULES = {
     "documentation": re.compile(r"\b(docs?|documentation|readme|typo)\b", re.I),
 }
 NEW_CONTRIBUTOR = {"FIRST_TIME_CONTRIBUTOR", "FIRST_TIMER", "NONE"}
+DEPENDABOT = "dependabot[bot]"
 TEST_TAG = "[sentinel-test]"  # lets the owner try the bot on their own post
 V = r"v?(\d+)(?:\.(\d+))?(?:\.(\d+))?"  # 1.2.3, 1.2 or just 4 (GitHub Actions)
 BUMP = re.compile(rf"from {V}\S* to {V}", re.I)
 
 DISCUSSIONS_Q = """query($owner:String!,$name:String!){repository(owner:$owner,name:$name){hasDiscussionsEnabled
  discussions(first:25,orderBy:{field:CREATED_AT,direction:DESC}){nodes{id number title body createdAt url isAnswered
- locked author{login __typename} category{name isAnswerable} comments(first:40){nodes{body author{login}}}}}}}"""
+ locked author{login __typename} category{name isAnswerable} comments(first:40){nodes{body author{login __typename}}}}}}}"""
 
 
 def marker(kind: str) -> str:
@@ -45,6 +46,13 @@ def is_bot(user: dict | None) -> bool:
     if not user:
         return True
     return user.get("type") == "Bot" or user.get("__typename") == "Bot" or str(user.get("login", "")).endswith("[bot]")
+
+
+def bot_marked(comments: list[dict], kind: str, author_key: str = "user") -> bool:
+    """True when a bot already left this marker. Markers typed by people are ignored, so nobody can
+    silence a warning (for example on a major dependency update) by pasting the hidden comment."""
+    return any(marker(kind) in (c.get("body") or "") and bool(c.get(author_key)) and is_bot(c.get(author_key))
+               for c in comments)
 
 
 RANK = {"patch": 0, "minor": 1, "major": 2}
@@ -197,7 +205,7 @@ class Sentinel:
             if labels & {"digest", "ledger", "code-health", "contribute"}:
                 continue
             comments = self.gh.paged(f"/repos/{name}/issues/{issue['number']}/comments", limit=100)
-            if any(marker("triage") in (c.get("body") or "") for c in comments):
+            if bot_marked(comments, "triage"):
                 continue
             wanted = [existing[k] for k, rx in LABEL_RULES.items() if rx.search(text) and k in existing and k not in labels]
             if wanted:
@@ -232,7 +240,7 @@ class Sentinel:
             user = pr.get("user") or {}
             if pr.get("draft") or "bot-off" in {lab["name"].lower() for lab in pr.get("labels", [])}:
                 continue
-            if user.get("login") == "dependabot[bot]":
+            if user.get("login") == DEPENDABOT and is_bot(user):
                 self._dependabot(repo, pr, s)
                 continue
             if is_bot(user):
@@ -244,7 +252,7 @@ class Sentinel:
 
     def _has_marker(self, repo: str, number: int, kind: str) -> bool:
         comments = self.gh.paged(f"/repos/{repo}/issues/{number}/comments", limit=100)
-        return any(marker(kind) in (c.get("body") or "") for c in comments)
+        return bot_marked(comments, kind)
 
     def _welcome_pr(self, repo: dict, pr: dict) -> None:
         name, n = repo["full_name"], pr["number"]
@@ -285,7 +293,7 @@ class Sentinel:
         except ValueError:
             return
         findings = review.clean_findings(raw, lines, rc.get("min_severity", "medium"), 5)
-        runs = self.gh.get(f"/repos/{name}/commits/{sha}/check-runs", per_page=100).get("check_runs", [])
+        runs = self._check_runs(name, sha)
         failing = [r for r in runs if r.get("conclusion") in ("failure", "timed_out", "action_required")]
         if not findings and not failing and not rc.get("post_when_clean", True):
             return
@@ -305,9 +313,29 @@ class Sentinel:
                     self.gh.request, "POST", f"/repos/{name}/pulls/{n}/reviews",
                     json={"commit_id": sha, "event": "COMMENT", "body": body})
 
+    def _check_runs_full(self, repo: str, sha: str) -> tuple[list[dict], bool]:
+        """Check runs plus whether the list is complete (fetched count matches GitHub's total_count, cap 500)."""
+        out: list[dict] = []
+        total: Any = None
+        page = 1
+        while len(out) < 500:
+            data = self.gh.get(f"/repos/{repo}/commits/{sha}/check-runs", per_page=100, page=page)
+            if total is None:
+                total = data.get("total_count")
+            items = data.get("check_runs", [])
+            out.extend(items)
+            if len(items) < 100:
+                break
+            page += 1
+        complete = isinstance(total, int) and not isinstance(total, bool) and len(out) == total
+        return out[:500], complete
+
+    def _check_runs(self, repo: str, sha: str) -> list[dict]:
+        return self._check_runs_full(repo, sha)[0]
+
     def _checks_green(self, repo: str, sha: str) -> bool:
-        runs = self.gh.get(f"/repos/{repo}/commits/{sha}/check-runs", per_page=100).get("check_runs", [])
-        if not runs:
+        runs, complete = self._check_runs_full(repo, sha)
+        if not runs or not complete:
             return False
         ok = all(r["status"] == "completed" and r["conclusion"] in ("success", "skipped", "neutral") for r in runs)
         status = self.gh.get(f"/repos/{repo}/commits/{sha}/status")
@@ -327,6 +355,9 @@ class Sentinel:
             self.report.flagged.append(f"{name}#{n} ({kind or 'unrecognised'} dependency update)")
             return
         detail = self.gh.get(f"/repos/{name}/pulls/{n}")
+        if not self._genuine_dependabot(name, n, pr, detail):
+            self.report.flagged.append(f"{name}#{n} (Dependabot PR has commits from someone else or moved; not merged)")
+            return
         state = detail.get("mergeable_state")
         green = self._checks_green(name, pr["head"]["sha"])
         if state == "behind" or (state in ("blocked", "unstable") and not green and self._checks_done(name, pr["head"]["sha"])):
@@ -340,9 +371,35 @@ class Sentinel:
                         f"/repos/{name}/pulls/{n}/merge",
                         json={"merge_method": "squash", "sha": pr["head"]["sha"]})
 
+    def _genuine_dependabot(self, name: str, n: int, pr: dict, detail: dict) -> bool:
+        """Only merge what Dependabot itself wrote: the PR (re-read from the API) is opened by dependabot[bot] from a
+        branch of this repository, its head has not moved, and every commit on it is authored by Dependabot."""
+        user = detail.get("user") or {}
+        head = detail.get("head") or {}
+        if user.get("login") != DEPENDABOT or user.get("type") != "Bot":
+            return False
+        if (head.get("repo") or {}).get("full_name") != name or head.get("sha") != pr["head"]["sha"]:
+            return False
+        count = detail.get("commits")
+        if not isinstance(count, int) or isinstance(count, bool) or not 0 < count <= 250:
+            return False  # unknown or beyond what the commits endpoint can list: cannot vouch for every commit
+        commits = self.gh.paged(f"/repos/{name}/pulls/{n}/commits", limit=250)
+        if len(commits) != count or commits[-1].get("sha") != pr["head"]["sha"]:
+            return False
+        return all(self._dependabot_commit(c) for c in commits)
+
+    @staticmethod
+    def _dependabot_commit(c: dict) -> bool:
+        """Author attribution alone can be faked with an email address, so also require a verified signature made by
+        GitHub itself (web-flow) or Dependabot."""
+        verification = (c.get("commit") or {}).get("verification") or {}
+        return ((c.get("author") or {}).get("login") == DEPENDABOT
+                and (c.get("committer") or {}).get("login") in {"web-flow", DEPENDABOT}
+                and verification.get("verified") is True)
+
     def _checks_done(self, repo: str, sha: str) -> bool:
-        runs = self.gh.get(f"/repos/{repo}/commits/{sha}/check-runs", per_page=100).get("check_runs", [])
-        return bool(runs) and all(r["status"] == "completed" for r in runs)
+        runs, complete = self._check_runs_full(repo, sha)
+        return complete and bool(runs) and all(r["status"] == "completed" for r in runs)
 
     # ------------------------------------------------------------------ discussions
     def discussions(self, repo: dict) -> None:
@@ -359,7 +416,7 @@ class Sentinel:
             if (d["locked"] or d["isAnswered"] or not self._recent(d["createdAt"]) or is_bot(author)
                     or owner_post or "bot-off" in (d.get("body") or "")):
                 continue
-            if any(marker("discussion") in (c.get("body") or "") for c in d["comments"]["nodes"]):
+            if bot_marked(d["comments"]["nodes"], "discussion", author_key="author"):
                 continue
             if any((c.get("author") or {}).get("login") == self.owner for c in d["comments"]["nodes"]):
                 continue  # the owner is already handling it
@@ -471,7 +528,8 @@ class Sentinel:
         llm = self.llm if self._ai_ok(self.base) else None
         picks = contrib.find(self.gh, llm, self.cfg, self.owner, self.now, seen, hasher)
         seen.update(hasher(p["url"]) for p in picks)
-        seen_list += [k for k in seen if k not in set(seen_list)]
+        known = set(seen_list)
+        seen_list += sorted(k for k in seen if k not in known)
         self.ledger.set("contrib_seen", seen_list[-1500:])
         self.ledger.set("contrib_at", self.now.isoformat(timespec="minutes"))
         if not picks:
@@ -507,8 +565,9 @@ class Sentinel:
             if repo["name"] in skip:
                 continue
             name = repo["full_name"]
-            issues = [i for i in self.gh.paged(f"/repos/{name}/issues", state="open", limit=300)
-                      if "pull_request" not in i]
+            # Repositories with issues turned off answer 410 here, which used to abort the whole digest.
+            issues = ([i for i in self.gh.paged(f"/repos/{name}/issues", state="open", limit=300)
+                       if "pull_request" not in i] if repo.get("has_issues", True) else [])
             prs = self.gh.paged(f"/repos/{name}/pulls", state="open", limit=100)
             rows.append(f"| [{repo['name']}](https://github.com/{name}) | {repo.get('stargazers_count', 0)} | "
                         f"{len(issues)} | {len(prs)} |")
@@ -517,3 +576,8 @@ class Sentinel:
                 + ("\n".join(f"- {f}" for f in self.report.flagged) or "- Nothing") + FOOTER)
         self._write(f"{home}: create {title}", self.gh.request, "POST", f"/repos/{home}/issues",
                     json={"title": title, "body": body, "labels": ["digest"]})
+        # Only the newest digest stays open, so old "waiting on you" lists don't pile up.
+        for old in existing:
+            if old.get("state") == "open" and old["title"] != title and is_bot(old.get("user")):
+                self._write(f"{home}#{old['number']}: close previous digest", self.gh.request, "PATCH",
+                            f"/repos/{home}/issues/{old['number']}", json={"state": "closed", "state_reason": "completed"})

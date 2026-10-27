@@ -15,9 +15,9 @@
 | Pull requests | Welcomes first-time contributors. **Bug review:** on every new commit it reads the changed lines and posts the concrete bugs it finds (file, line, why, suggested fix), plus any failing checks. It only comments: it never approves, blocks or pushes code. | review only |
 | Weekly code health | Reads a different few source files each week and opens one "Code health report" issue when it finds likely bugs. Findings already reported are never repeated. | yes |
 | Discussions (Q&A) | Answers from your README and `docs/` only, lists its sources, and says so when the docs don't cover it instead of guessing. Ideas get a thank-you. | AI answers only |
-| Dependabot | Merges the update types you allow once every check has passed, asks Dependabot to rebase when a branch is behind, and flags the rest. | no |
+| Dependabot | Merges the update types you allow once every check has passed, asks Dependabot to rebase when a branch is behind, and flags the rest. Only pull requests opened by `dependabot[bot]` from a branch of the same repository, with every commit authored by Dependabot, are merged. | no |
 
-Every finding is checked against the real diff or file before it is posted, so a model cannot point at lines that don't exist. Model output is stripped of @mentions and hidden HTML. The bot never runs code from your repository.
+Every finding is checked against the real diff or file before it is posted, so a model cannot point at lines that don't exist. Model output is stripped of @mentions and hidden HTML, and issue or discussion text is passed to the model as untrusted data: the model only writes comment text and has no way to merge, label or call any API. The bot never runs code from your repository.
 
 ## Settings for your repository
 
@@ -64,10 +64,13 @@ The owner's own repositories use the `[features]` defaults in `sentinel.toml`. `
 ## Development
 
 ```bash
-pip install --require-hashes -r requirements.lock && pip install pytest ruff
+pip install --require-hashes -r requirements.lock && pip install pytest ruff pip-audit
 ruff check sentinel tests && python -m pytest -q
+pip-audit -r requirements.lock --require-hashes --disable-pip
 GITHUB_TOKEN=... python -m sentinel --dry-run   # a token that can read your repositories
 ```
+
+CI runs the lint and tests on every push and pull request. Dependabot keeps the locked dependencies and pinned actions current; in this repository those updates are reviewed by hand (see [`.github/nexonic-sentinel.toml`](.github/nexonic-sentinel.toml)) because its Actions hold the App's private key.
 
 ## Licence
 

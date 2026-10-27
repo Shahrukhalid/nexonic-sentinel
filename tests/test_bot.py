@@ -18,6 +18,11 @@ CFG = {"owner": "owner", "lookback_hours": 72, "max_llm_calls_per_run": 3, "mode
        "automerge": {"dependabot": ["patch", "minor"]}, "skip_repos": ["owner"], "home_repo": "nexonic-sentinel"}
 
 
+def dep_commit(sha="abc", author="dependabot[bot]", committer="web-flow", verified=True):
+    return {"sha": sha, "author": {"login": author}, "committer": {"login": committer},
+            "commit": {"verification": {"verified": verified}}}
+
+
 class FakeGitHub:
     """Just enough of the GitHub API, recording every write."""
 
@@ -29,6 +34,7 @@ class FakeGitHub:
         self.comments: dict[int, list[dict]] = {}
         self.pulls: list[dict] = []
         self.pull_detail: dict[int, dict] = {}
+        self.pr_commits: dict[int, list[dict]] = {}
         self.checks: dict[str, list[dict]] = {}
         self.discussions: list[dict] = []
         self.labels = [{"name": "bug"}, {"name": "question"}, {"name": "enhancement"}]
@@ -68,8 +74,16 @@ class FakeGitHub:
             return httpx.Response(200, json=self.reviews.get(int(path.split("/")[-2]), []))
         if path.startswith("/repos/owner/app/pulls/") and path.endswith("/files"):
             return httpx.Response(200, json=self.pr_files.get(int(path.split("/")[-2]), []))
+        if path.startswith("/repos/owner/app/pulls/") and path.endswith("/commits"):
+            n = int(path.split("/")[-2])
+            return httpx.Response(200, json=self.pr_commits.get(n, [dep_commit()]))
         if path.startswith("/repos/owner/app/pulls/"):
-            return httpx.Response(200, json=self.pull_detail[int(path.rsplit("/", 1)[1])])
+            n = int(path.rsplit("/", 1)[1])
+            listed = next((p for p in self.pulls if p["number"] == n), {})
+            # Like the API: the detail repeats the author and head of the listed PR (same-repository branch).
+            detail = {"user": listed.get("user"), "head": {**listed.get("head", {}), "repo": {"full_name": "owner/app"}},
+                      "commits": len(self.pr_commits.get(n, [0]))}
+            return httpx.Response(200, json={**detail, **self.pull_detail[n]})
         if path == "/repos/owner/app/commits/main":
             return httpx.Response(200, json={"sha": "headsha0000000"})
         if path == "/search/issues":
@@ -80,7 +94,8 @@ class FakeGitHub:
             return httpx.Response(200, json={"tree": [{"path": "src/parser.py", "type": "blob", "size": 900},
                                                       {"path": "README.md", "type": "blob", "size": 300}]})
         if path.endswith("/check-runs"):
-            return httpx.Response(200, json={"check_runs": self.checks.get(path.split("/")[-2], [])})
+            return httpx.Response(200, json={"total_count": len(self.checks.get(path.split("/")[-2], [])),
+                                                "check_runs": self.checks.get(path.split("/")[-2], [])})
         if path.endswith("/status"):
             return httpx.Response(200, json={"total_count": 0, "state": "pending"})
         if path == "/repos/owner/app/git/trees/main":
@@ -124,7 +139,7 @@ def test_issue_skipped_when_already_triaged_or_owner_or_bot_or_old_or_bot_off():
     fake = FakeGitHub()
     fake.issues = [issue(1, "bug"), issue(2, "mine", login="owner"), issue(3, "auto", login="renovate[bot]"),
                    issue(4, "old bug", created=OLD), issue(5, "bug", labels=["bot-off"])]
-    fake.comments[1] = [{"body": marker("triage")}]
+    fake.comments[1] = [{"body": marker("triage"), "user": {"login": "nexonic-sentinel[bot]", "type": "Bot"}}]
     make(fake).run()
     assert fake.writes == []
 
@@ -201,7 +216,7 @@ def test_first_time_contributor_is_welcomed_once():
     make(fake).run()
     assert len([w for w in fake.writes if w[1].endswith("/9/comments")]) == 1
     fake.writes.clear()
-    fake.comments[9] = [{"body": marker("welcome")}]
+    fake.comments[9] = [{"body": marker("welcome"), "user": {"login": "nexonic-sentinel[bot]", "type": "Bot"}}]
     make(fake).run()
     assert fake.writes == []
 
@@ -254,7 +269,8 @@ def test_discussions_skipped_when_owner_replied_or_already_handled_or_sensitive_
         return httpx.Response(500)
 
     fake.discussions = [disc(1, "q", comments=[{"body": "hi", "author": {"login": "owner"}}]),
-                        disc(2, "q", comments=[{"body": marker("discussion"), "author": {"login": "x"}}]),
+                        disc(2, "q", comments=[{"body": marker("discussion"),
+                                                "author": {"login": "nexonic-sentinel", "__typename": "Bot"}}]),
                         disc(3, "Is there a security vulnerability in the token handling?")]
     make(fake, llm=OpenRouter("k", ["m"], transport=httpx.MockTransport(handler))).run()
     graph = [w for w in fake.writes if w[0] == "GRAPHQL"]

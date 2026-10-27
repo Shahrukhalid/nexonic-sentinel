@@ -1,0 +1,4 @@
+# Settings for this repository only (see README, "Settings for your repository").
+# Dependency updates to the bot itself are never merged automatically: this repository's Actions hold the
+# GitHub App's private key, so every change to what runs here gets a human review.
+dependabot = []

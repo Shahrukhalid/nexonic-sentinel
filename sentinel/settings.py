@@ -22,12 +22,23 @@ PUBLIC_DEFAULTS: dict[str, Any] = {
 }
 
 
+def _table(cfg: dict[str, Any], name: str) -> dict[str, Any]:
+    """A TOML table from sentinel.toml, or {} when it is missing or not a table (e.g. `features = "x"`)."""
+    value = cfg.get(name)
+    return value if isinstance(value, dict) else {}
+
+
 def home_defaults(cfg: dict[str, Any]) -> dict[str, Any]:
-    f = cfg.get("features", {})
+    f = _table(cfg, "features")
     out = dict(PUBLIC_DEFAULTS)
     out["ai"] = True  # the owner's own repositories use AI features unless sentinel.toml turns them off
-    out.update({k: bool(f[k]) for k in BOOLS if k in f})
-    out["dependabot"] = list(cfg.get("automerge", {}).get("dependabot", ["patch", "minor"]))
+    out.update({k: f[k] for k in BOOLS if isinstance(f.get(k), bool)})
+    # A malformed [automerge] section merges nothing rather than falling back to the default.
+    automerge = cfg.get("automerge", {})
+    dep = automerge.get("dependabot", ["patch", "minor"]) if isinstance(automerge, dict) else []
+    # Anything but a list of strings (e.g. [["patch"]]) merges nothing.
+    ok = isinstance(dep, list) and all(isinstance(x, str) for x in dep)
+    out["dependabot"] = [x for x in dep if x in UPDATE_KINDS] if ok else []
     return out
 
 
@@ -43,9 +54,10 @@ def parse(text: str | None, base: dict[str, Any]) -> dict[str, Any]:
     for key in BOOLS:
         if isinstance(data.get(key), bool):
             out[key] = data[key]
-    dep = data.get("dependabot")
-    if isinstance(dep, list) and all(isinstance(x, str) for x in dep):
-        out["dependabot"] = [x for x in dep if x in UPDATE_KINDS]
+    if "dependabot" in data:
+        dep = data["dependabot"]
+        ok = isinstance(dep, list) and all(isinstance(x, str) for x in dep)
+        out["dependabot"] = [x for x in dep if x in UPDATE_KINDS] if ok else []  # malformed: merge nothing
     return out
 
 
