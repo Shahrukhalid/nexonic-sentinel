@@ -581,4 +581,4 @@ class Sentinel:
         for old in existing:
             if old.get("state") == "open" and old["title"] != title and is_bot(old.get("user")):
                 self._write(f"{home}#{old['number']}: close previous digest", self.gh.request, "PATCH",
-                            f"/repos/{home}#{old['number']}".replace("#", "/issues/"), json={"state": "closed", "state_reason": "completed"})
+                            f"/repos/{home}/issues/{old['number']}", json={"state": "closed", "state_reason": "completed"})
