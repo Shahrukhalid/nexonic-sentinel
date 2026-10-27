@@ -36,7 +36,9 @@ def home_defaults(cfg: dict[str, Any]) -> dict[str, Any]:
     # A malformed [automerge] section merges nothing rather than falling back to the default.
     automerge = cfg.get("automerge", {})
     dep = automerge.get("dependabot", ["patch", "minor"]) if isinstance(automerge, dict) else []
-    out["dependabot"] = [x for x in dep if x in UPDATE_KINDS] if isinstance(dep, list) else []
+    # Anything but a list of strings (e.g. [["patch"]]) merges nothing.
+    ok = isinstance(dep, list) and all(isinstance(x, str) for x in dep)
+    out["dependabot"] = [x for x in dep if x in UPDATE_KINDS] if ok else []
     return out
 
 
@@ -52,9 +54,10 @@ def parse(text: str | None, base: dict[str, Any]) -> dict[str, Any]:
     for key in BOOLS:
         if isinstance(data.get(key), bool):
             out[key] = data[key]
-    dep = data.get("dependabot")
-    if isinstance(dep, list) and all(isinstance(x, str) for x in dep):
-        out["dependabot"] = [x for x in dep if x in UPDATE_KINDS]
+    if "dependabot" in data:
+        dep = data["dependabot"]
+        ok = isinstance(dep, list) and all(isinstance(x, str) for x in dep)
+        out["dependabot"] = [x for x in dep if x in UPDATE_KINDS] if ok else []  # malformed: merge nothing
     return out
 
 
