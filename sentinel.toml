@@ -44,19 +44,50 @@ files_per_week = 4
 min_severity = "medium"
 max_file_bytes = 15000
 
-[contrib]
-# Hourly hunt for open-source issues where maintainers asked for help. For each pick the bot reads the real files
-# and drafts a fix, kept only if it applies cleanly to the current code (and parses, for Python).
-# Picks are posted in the home repository only; the bot never comments or opens pull requests elsewhere.
+[growth]
+# One weekly "Growth inbox YYYY-Www" issue (label `growth`) in the home repository collects the suggestions below and
+# closes last week's inbox. These features only run for the owner's own install and are off for everyone else.
+# They only READ other projects: the bot never comments, opens issues or pull requests, stars, follows or reacts
+# anywhere except in the home repository. Set enabled = false (or the top-level enabled = false) to stop it.
 enabled = true
-every_hours = 1
+
+[contrib]
+# Scout: fresh open issues (help wanted / good first issue / bug) in active projects, in the languages you use.
+# Skips assigned issues, issues with an open linked pull request and issues with a recent "I'm working on this"
+# comment. For each pick the bot reads the real files, drafts a fix kept only if it applies cleanly to the current
+# code (and parses, for Python), and adds a short note on how to reproduce it and where the bug likely is.
+enabled = true
 languages = ["python", "typescript", "javascript"]
 min_stars = 30
-max_items = 2              # picks per hunt
-max_age_days = 30
+max_items = 3              # picks per week
+fresh_days = 14            # issue updated within this many days
+active_days = 60           # project pushed within this many days
+claim_days = 21            # a "working on it" comment this recent counts as taken
+max_checks = 20            # candidates inspected per run (caps API use)
 draft_fix = true
 fix_files = 2              # files read for each fix
 max_file_bytes = 20000
+
+[backlinks]
+# Backlink finder: curated lists (awesome-*) matching the topics of your public repositories that are active, accept
+# pull requests and do not mention the repository yet. The bot drafts the exact entry line and its section.
+# Comment `submitted bl-<id>` or `declined bl-<id>` on the inbox to stop a suggestion from coming back.
+enabled = true
+max_items = 3              # suggestions per week
+min_stars = 50
+active_days = 180          # the list was pushed within this many days
+max_searches = 10
+max_reads = 15
+
+[answers]
+# Discussions helper: recent unanswered Q&A discussions in other active projects on your topics, with a drafted
+# answer from the discussion plus the project's docs when available. Suggestions only; nothing is ever posted.
+enabled = true
+max_items = 3              # per week
+max_age_days = 7
+min_stars = 100
+active_days = 60
+# keywords = ["fastapi", "opencv"]   # default: the most common topics of your repositories
 
 [automerge]
 # Dependabot updates merged automatically once every check passes. Major updates always wait for you.

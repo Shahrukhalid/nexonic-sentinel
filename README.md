@@ -45,13 +45,28 @@ Without the file, the defaults are the values shown. To stop the bot on a single
 
 See also [SECURITY.md](SECURITY.md).
 
-## Contribution finder (owner only)
+## Growth inbox (owner only)
 
-Every hour, for the account that runs the bot, Nexonic Sentinel hunts for open issues on other projects where maintainers asked for help (`good first issue`, `help wanted`). For each pick it reads the real source files and drafts a fix as a diff, plus a test. A fix is kept only if it applies cleanly to the current code (and still parses, for Python). Picks are added to a "Contribution shortlist" issue in this repository.
+Once a week, for the account that runs the bot, Nexonic Sentinel opens one issue in this repository, **Growth inbox YYYY-Www** (label `growth`), and closes the previous week's inbox. It lists automated suggestions: check each one before acting. These features are off for every other installation, and each one can be switched off in [`sentinel.toml`](sentinel.toml).
 
-The bot never comments, forks or opens pull requests on those projects. You read the fix, run the project's tests, tell the maintainers you are taking the issue, and submit it yourself.
+**The bot only reads other projects.** It never comments, opens issues or pull requests, forks, stars, follows or reacts anywhere except in its own repository. You decide what to act on and do it yourself.
 
-**Models:** `models = ["all-free"]` uses every free text model on OpenRouter, fetched live each run, so new free models are picked up automatically. Bigger models can be listed first. OpenRouter allows 50 free-model requests a day on a key without credits and 1,000 once the account has bought $10 of credits; `daily_llm_budget = "auto"` detects which applies.
+| Section | What it finds |
+|---|---|
+| Scout | Fresh (updated in the last 14 days) open issues labelled `help wanted`, `good first issue` or `bug` in active, non-archived projects with enough stars, in your languages (Python, TypeScript, JavaScript). Issues that are assigned, have an open linked pull request or a recent "I'm working on this" comment are skipped. Picks are ranked by freshness, project activity and likely effort. For each one the bot reads the real files, drafts a fix kept only if it applies cleanly to the current code (and parses, for Python), and adds a short note on how to reproduce the problem and where it likely is. |
+| Backlinks | For each of your public repositories, curated lists (`awesome-*`) that match its topics, are active, do not reject pull requests in their contribution guide and do not mention the repository yet. It drafts the exact entry line in the list's format and says which section it belongs in. Comment `submitted bl-<id>` or `declined bl-<id>` (the id is shown in the inbox) so a list is not suggested again; unanswered suggestions wait eight weeks. |
+| Discussions | Recent unanswered Q&A discussions in other active projects on your topics, with a drafted answer from the discussion text and the project's docs when available. Suggestions only. |
+
+Each suggestion appears once (a ledger of hashed URLs prevents repeats) and every section has a weekly cap and a per-run limit on API calls and model requests.
+
+```toml
+[growth]    enabled = true                  # master switch for the weekly inbox
+[contrib]   enabled, languages, min_stars, max_items (per week), fresh_days, active_days, claim_days, max_checks
+[backlinks] enabled, max_items (per week), min_stars, active_days, max_searches, max_reads
+[answers]   enabled, max_items (per week), max_age_days, min_stars, active_days, keywords
+```
+
+Backlinks and Discussions are off unless their `enabled = true` is set. The top-level `enabled = false` stops everything. **Models:** `models = ["all-free"]` uses every free text model on OpenRouter, fetched live each run, so new free models are picked up automatically. Bigger models can be listed first. OpenRouter allows 50 free-model requests a day on a key without credits and 1,000 once the account has bought $10 of credits; `daily_llm_budget = "auto"` detects which applies.
 
 ## Run your own copy
 

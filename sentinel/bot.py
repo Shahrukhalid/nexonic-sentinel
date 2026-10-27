@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
-from . import contrib, knowledge, review
+from . import contrib, growth, knowledge, review
 from . import settings as repo_settings
 from .github import GitHub, GitHubError
 from .ledger import Ledger
@@ -202,7 +202,7 @@ class Sentinel:
             owner_post = user.get("login") == self.owner and TEST_TAG not in text.lower()
             if is_bot(user) or owner_post or "bot-off" in labels or "bot-off" in text:
                 continue
-            if labels & {"digest", "ledger", "code-health", "contribute"}:
+            if labels & {"digest", "ledger", "code-health", "contribute", "growth"}:
                 continue
             comments = self.gh.paged(f"/repos/{name}/issues/{issue['number']}/comments", limit=100)
             if bot_marked(comments, "triage"):
@@ -509,47 +509,124 @@ class Sentinel:
                     f"/repos/{name}/issues", json={"title": f"Code health report {week}", "body": body,
                                                    "labels": ["code-health"]})
 
-    # ------------------------------------------------------------------ contribution shortlist (owner only)
-    def contributions(self) -> None:
-        c = self.cfg.get("contrib", {})
-        if not self.home or self.ledger is None or not c.get("enabled", True):
+    # ------------------------------------------------------------------ growth inbox (owner only)
+    def growth(self) -> None:
+        """Once a week: scout, backlinks and discussion drafts, all listed in ONE issue in the owner's own repository.
+
+        Everything found about other projects is only ever written there. Foreign repositories are read through a
+        read-only client, and the single write below goes to the home repository."""
+        g = self.cfg.get("growth", {})
+        if (not self.home or self.ledger is None or not self.cfg.get("enabled", True)
+                or not isinstance(g, dict) or not g.get("enabled", True)):
             return
-        every = max(1.0, float(c.get("every_hours", 24)))
-        last = self.ledger.get("contrib_at")
-        if last:
-            try:
-                if self.now - datetime.fromisoformat(last) < timedelta(hours=every) - timedelta(minutes=10):
-                    return
-            except ValueError:
-                pass
+        week = self.now.strftime("%G-W%V")
+        if self.ledger.get("growth_week") == week:
+            return
         home = f"{self.owner}/{self.cfg.get('home_repo', 'nexonic-sentinel')}"
-        hasher = lambda url: lkey("contrib", url)  # noqa: E731
-        seen_list = list(self.ledger.get("contrib_seen", []))
-        seen = set(seen_list)
-        llm = self.llm if self._ai_ok(self.base) else None
-        picks = contrib.find(self.gh, llm, self.cfg, self.owner, self.now, seen, hasher)
-        seen.update(hasher(p["url"]) for p in picks)
-        known = set(seen_list)
-        seen_list += sorted(k for k in seen if k not in known)
-        self.ledger.set("contrib_seen", seen_list[-1500:])
-        self.ledger.set("contrib_at", self.now.isoformat(timespec="minutes"))
-        if not picks:
+        title = f"Growth inbox {week}"
+        issues = self.gh.paged(f"/repos/{home}/issues", state="all", labels="growth", limit=30)
+        state = dict(self.ledger.get("backlinks", {}))
+        for old in issues[:3]:  # the owner marks backlinks as submitted/declined in comments
+            if old.get("comments"):
+                growth.apply_commands(state, self.gh.paged(f"/repos/{home}/issues/{old['number']}/comments", limit=100),
+                                      self.owner, self.now)
+        if any(i["title"] == title for i in issues):
+            self.ledger.set("growth_week", week)
+            self.ledger.set("backlinks", state)
             return
-        stamp = self.now.strftime("%Y-%m-%d %H:%M UTC")
-        fixes = sum(1 for p in picks if (p.get("draft") or {}).get("fix"))
-        existing = [i for i in self.gh.paged(f"/repos/{home}/issues", state="open", labels="contribute", limit=5)
-                    if marker("contribute") in (i.get("body") or "")]
-        update = contrib.render(picks, stamp)
-        if existing:
-            self._write(f"{home}: add {len(picks)} contribution picks ({fixes} with fixes)", self.gh.comment, home,
-                        existing[0]["number"], update + FOOTER)
-        else:
-            intro = (marker("contribute") + "\nOpen-source issues where maintainers asked for help, found by "
-                     "Nexonic Sentinel, with drafted fixes where the bot could verify they apply. New picks are added "
-                     "as comments. Close this issue to start a fresh one.\n\n" + update + FOOTER)
-            self._write(f"{home}: create contribution shortlist ({len(picks)}, {fixes} with fixes)",
-                        self.gh.request, "POST", f"/repos/{home}/issues",
-                        json={"title": "Contribution shortlist", "body": intro, "labels": ["contribute"]})
+        ro = growth.ReadOnly(self.gh)
+        skip = set(self.cfg.get("skip_repos", []))
+        mine = [r for r in self.gh.repos() if r["name"] not in skip and not r.get("private")]
+        llm = self.llm if self._ai_ok(self.base) else None
+        notes: list[str] = []
+        hasher = lambda url: lkey("contrib", url)  # noqa: E731
+        scout_text = back_text = disc_text = "Not enabled."
+        found = 0
+
+        c = self.cfg.get("contrib", {})
+        if isinstance(c, dict) and c.get("enabled", True):
+            try:
+                seen_list = list(self.ledger.get("contrib_seen", []))
+                seen = set(seen_list)
+                picks = contrib.find(ro, llm, self.cfg, self.owner, self.now, seen, hasher)
+                seen.update(hasher(p["url"]) for p in picks)
+                self.ledger.set("contrib_seen", (seen_list + sorted(k for k in seen if k not in set(seen_list)))[-1500:])
+                scout_text, found = contrib.render(picks), found + len(picks)
+            except Exception as exc:  # noqa: BLE001 - one broken section must not stop the others
+                notes.append("scout"), self.report.errors.append(f"growth scout: {exc}")
+                scout_text = "Could not be fetched this week."
+
+        b = self.cfg.get("backlinks", {})
+        if isinstance(b, dict) and b.get("enabled", False):
+            try:
+                llm = self.llm if self._ai_ok(self.base) else None
+                items = growth.find_backlinks(ro, llm, self.cfg, self.owner, self.now, state, mine)
+                for it in items:
+                    state[it["id"]] = {"s": "suggested", "at": self.now.date().isoformat()}
+                back_text, found = growth.render_backlinks(items), found + len(items)
+            except Exception as exc:  # noqa: BLE001
+                notes.append("backlinks"), self.report.errors.append(f"growth backlinks: {exc}")
+                back_text = "Could not be fetched this week."
+
+        a = self.cfg.get("answers", {})
+        if isinstance(a, dict) and a.get("enabled", False):
+            try:
+                dseen_list = list(self.ledger.get("disc_seen", []))
+                dh = lambda url: lkey("disc", url)  # noqa: E731
+                found_d = growth.find_discussions(ro, self.cfg, self.owner, self.now, set(dseen_list), dh, mine)
+                items = []
+                for d in found_d:
+                    items.append({"discussion": d, "draft": self._help_draft(d)})
+                self.ledger.set("disc_seen", (dseen_list + [dh(d["url"]) for d in found_d])[-1500:])
+                disc_text, found = growth.render_discussions(items), found + len(items)
+            except LLMQuotaExceeded:
+                notes.append("discussion drafts (daily quota reached)")
+                disc_text = "Not available this week."
+            except Exception as exc:  # noqa: BLE001
+                notes.append("discussions"), self.report.errors.append(f"growth discussions: {exc}")
+                disc_text = "Could not be fetched this week."
+
+        self.ledger.set("backlinks", growth.prune(state))
+        if not found and notes:
+            return  # nothing to show and something failed: try again on the next run
+        self.ledger.set("growth_week", week)
+        if not found:
+            self.report.act(f"{home}: growth inbox {week}, nothing new")
+            return
+        body = marker("growth") + "\n" + growth.render_inbox(week, scout_text, back_text, disc_text, notes)
+        self._write(f"{home}: create {title} ({found} suggestions)", self.gh.request, "POST",
+                    f"/repos/{home}/issues", json={"title": title, "body": body, "labels": ["growth"]})
+        for old in issues:  # only the newest inbox stays open
+            if old.get("state") == "open" and old["title"] != title and marker("growth") in (old.get("body") or ""):
+                self._write(f"{home}#{old['number']}: close previous growth inbox", self.gh.request, "PATCH",
+                            f"/repos/{home}/issues/{old['number']}", json={"state": "closed", "state_reason": "completed"})
+
+    def _help_draft(self, d: dict) -> dict[str, Any] | None:
+        """Draft an answer for someone else's discussion from its text plus the project's docs. Never posted."""
+        if not self._ai_ok(self.base):
+            return None
+        repo = d["repository"]
+        info = {"full_name": repo["nameWithOwner"], "default_branch": (repo.get("defaultBranchRef") or {}).get("name", "main")}
+        question = f"{d['title']}\n\n{d.get('body') or ''}"
+        try:
+            excerpts = knowledge.best_excerpts(question, self._docs_for(info))
+        except GitHubError:
+            excerpts = []
+        try:
+            if excerpts:
+                reply = self.llm.answer(info["full_name"], question, excerpts)
+                if reply.get("confident"):
+                    links = [f"https://github.com/{info['full_name']}/blob/{info['default_branch']}/{p}"
+                             for p in dict.fromkeys(reply["sources"])]
+                    return {"answer": reply["answer"], "sources": links, "basis": "from the project's docs"}
+            reply = self.llm.draft_help(info["full_name"], question)
+            if reply["confident"] and len(reply["answer"]) >= 20:
+                return {"answer": reply["answer"], "sources": [], "basis": "from the question only, verify it"}
+        except LLMQuotaExceeded:
+            raise
+        except (LLMError, ValueError):
+            return None
+        return None
 
     # ------------------------------------------------------------------ weekly digest
     def digest(self) -> None:
