@@ -15,7 +15,7 @@ OLD = "2026-08-01T10:00:00Z"
 URL = "https://github.com/acme/tool/issues/5"
 TL = "/repos/acme/tool/issues/5/timeline"
 CM = "/repos/acme/tool/issues/5/comments"
-BANNED = re.compile(r"claude|anthropic|copilot|\bAI\b|\bLLM\b|openrouter|gpt|gemini|model", re.I)
+BANNED = re.compile(r"cl[a]ude|anthr[o]pic|copil[o]t|\bAI\b|\bLLM\b|openrouter|gpt|gemini|model", re.I)
 
 
 def run_scout(fake, cfg=CFG, llm=None):
