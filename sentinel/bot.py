@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
-from . import contrib, growth, knowledge, review
+from . import contrib, growth, iptv, knowledge, review
 from . import settings as repo_settings
 from .github import GitHub, GitHubError
 from .ledger import Ledger
@@ -202,8 +202,10 @@ class Sentinel:
             owner_post = user.get("login") == self.owner and TEST_TAG not in text.lower()
             if is_bot(user) or owner_post or "bot-off" in labels or "bot-off" in text:
                 continue
-            if labels & {"digest", "ledger", "code-health", "contribute", "growth"}:
+            if labels & {"digest", "ledger", "code-health", "contribute", "growth", "channel-review"}:
                 continue
+            if name.lower() == self._iptv_repo() and (iptv.is_suggestion(issue) or iptv.is_broken_report(issue)):
+                continue  # the channel review answers these itself
             comments = self.gh.paged(f"/repos/{name}/issues/{issue['number']}/comments", limit=100)
             if bot_marked(comments, "triage"):
                 continue
@@ -600,6 +602,27 @@ class Sentinel:
             if old.get("state") == "open" and old["title"] != title and marker("growth") in (old.get("body") or ""):
                 self._write(f"{home}#{old['number']}: close previous growth inbox", self.gh.request, "PATCH",
                             f"/repos/{home}/issues/{old['number']}", json={"state": "closed", "state_reason": "completed"})
+
+    def _iptv_repo(self) -> str:
+        """The channel-review repository when that feature is switched on for this run, else an empty string."""
+        c = self.cfg.get("iptv_review", {})
+        if not self.home or not self.cfg.get("enabled", True) or not isinstance(c, dict) or c.get("enabled", False) is not True:
+            return ""
+        return str(c.get("repo", "")).lower()
+
+    def iptv_review(self) -> None:
+        """Weekly channel review issue, owner commands and community suggestions for the owner's IPTV repository.
+
+        Off unless `[iptv_review] enabled = true`. Everything it writes goes to the one configured repository, which
+        must belong to the owner."""
+        repo = self._iptv_repo()
+        if not repo:
+            return
+        try:
+            iptv.ChannelReview(self.gh, self.cfg["iptv_review"], self.owner, self.now, self.ledger, self.report,
+                               self.dry).run()
+        except (ValueError, RuntimeError, GitHubError) as exc:
+            self.report.errors.append(f"iptv review: {exc}")
 
     def _help_draft(self, d: dict) -> dict[str, Any] | None:
         """Draft an answer for someone else's discussion from its text plus the project's docs. Never posted."""
