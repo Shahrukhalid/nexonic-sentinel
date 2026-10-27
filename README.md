@@ -70,6 +70,23 @@ Each suggestion appears once (a ledger of hashed URLs prevents repeats) and ever
 
 Backlinks and Discussions are off unless their `enabled = true` is set. The top-level `enabled = false` stops everything. **Models:** `models = ["all-free"]` uses every free text model on OpenRouter, fetched live each run, so new free models are picked up automatically. Bigger models can be listed first. OpenRouter allows 50 free-model requests a day on a key without credits and 1,000 once the account has bought $10 of credits; `daily_llm_budget = "auto"` detects which applies.
 
+## Channel review (owner only)
+
+For the owner's IPTV catalogue ([`nexonic-iptv`](https://github.com/Shahrukhalid/nexonic-iptv)), Nexonic Sentinel runs a small review workflow. It is off unless `[iptv_review] enabled = true`, it only works in the one repository named there (which must belong to the owner), and it stops at the first thing it is unsure about.
+
+| What | How it works |
+|---|---|
+| Weekly review | On the configured weekday it opens **Channel review YYYY-Www** (label `channel-review`) with a table of the records in `data/pending` (id, country, name, categories, evidence page, stream host, basis, why pending), a short "How to decide" note and the command syntax, and closes last week's issue. |
+| Owner commands | Comments on that issue from the owner's own account (exact login, a user account, association `OWNER`; everyone else, including bots, is ignored): `approve <id>` or `reject <id> <reason>`, one per line, several allowed. Each decision moves the record in one commit (`Approve channel <id>` / `Reject channel <id>`) and the result, including errors for unknown ids, is posted as a reply. A record whose basis is `none` needs one on the line: `approve <id> official-cdn-stream`. Approval is refused for adult-oriented records, streams the source policy forbids (IP hosts, tokens, restreams) and duplicates of approved channels. Approved records go to `data/approved/<cc>.yaml` (`auto/` for automatically admitted ones) with `reviewer: owner`, today's date and `adult_screening: pass`; rejected records go to `data/rejected/<cc>.yaml` with the reason. |
+| Suggestions | Issues from the "Suggest a free channel" form are checked (https stream link ending in `.m3u8`/`.mpd`, no tokens, credentials or IP hosts, evidence page on the broadcaster's own domain, known country, language and category, all confirmations ticked, no duplicate of an approved, pending or rejected record). A valid one is added to `data/pending` with `method: community-suggestion` and the issue as its reference; an invalid one gets a reply listing what is missing. Suggestions are never approved automatically. They wait while `nexonic/models.py` does not yet accept that method. |
+| Broken-stream reports | "Report broken channel" issues get the channel's latest status from `reports/channels.json` and the `stream-report` label. No data is edited. |
+
+Every processed comment and issue is remembered in the ledger (and by a hidden marker in the bot's reply), so nothing is done twice. The YAML files are edited as text one record at a time, so all other lines stay as they were, and each result is parsed back and compared before it is committed. Decisions are committed to the repository's default branch, so the GitHub App needs *Contents: read & write* there and, if the branch is protected, permission to push to it. The feature reads the repository's files through the GitHub API and imports nothing from it.
+
+```toml
+[iptv_review] enabled, repo, weekday, owner_login, suggestions, broken_reports, max_rows
+```
+
 ## Run your own copy
 
 1. Create a GitHub App: webhook off; repository permissions *Contents: read & write*, *Issues: read & write*, *Pull requests: read & write*, *Discussions: read & write*, *Checks: read*, *Commit statuses: read*, *Metadata: read*. Install it where you want it.

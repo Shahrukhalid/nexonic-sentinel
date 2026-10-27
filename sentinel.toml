@@ -92,3 +92,17 @@ active_days = 60
 [automerge]
 # Dependabot updates merged automatically once every check passes. Major updates always wait for you.
 dependabot = ["patch", "minor"]
+
+[iptv_review]
+# Channel review for the owner's IPTV repository: a weekly "Channel review YYYY-Www" issue (label `channel-review`) listing
+# pending records, `approve <id>` / `reject <id> <reason>` comments from the owner (nobody else), channel suggestions from
+# the suggestion form turned into pending records (never approved automatically) and replies to broken-stream reports.
+# Everything is written to the one repository below, which must belong to the owner. Decisions are committed to its
+# default branch, so the GitHub App must be allowed to push there.
+enabled = true
+repo = "Shahrukhalid/nexonic-iptv"
+weekday = "monday"           # the weekly issue is opened on this day (or the first run after it)
+owner_login = "Shahrukhalid" # the only account whose commands are carried out
+suggestions = true           # turn valid suggestion issues into pending records
+broken_reports = true        # answer broken-stream reports with the latest status
+max_rows = 80                # most records listed in the weekly issue

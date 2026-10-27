@@ -94,6 +94,7 @@ def main(argv: list[str] | None = None) -> int:
             report = bot.run()
             if home:
                 bot.growth()
+                bot.iptv_review()
                 if args.digest or now.weekday() == 0 and os.environ.get("GITHUB_EVENT_NAME") == "schedule":
                     bot.digest()
         except Exception as exc:  # noqa: BLE001 - one broken installation must not stop the others
