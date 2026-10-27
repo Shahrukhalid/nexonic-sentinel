@@ -331,7 +331,7 @@ def test_quota_error_during_review_is_retried_next_run():
     ledger = MemLedger()
     limited = OpenRouter("k", ["m"], transport=httpx.MockTransport(lambda r: httpx.Response(429)))
     rep = Sentinel(gh(fake), CFG, llm=limited, now=NOW, ledger=ledger).run()
-    assert any("AI paused" in f for f in rep.flagged)
+    assert any("reviews paused" in f for f in rep.flagged)
     assert not any(k for k in ledger.data if k == key("review", "owner/app", "abc123def4567"))
     ok = fake_llm({"findings": []})
     Sentinel(gh(fake), CFG, llm=ok, now=NOW, ledger=ledger).run()
