@@ -1,0 +1,18 @@
+# Keeps the bot's own dependencies and pinned actions current. These updates are reviewed by hand
+# (see .github/nexonic-sentinel.toml): this repository holds the App's private key.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      python:
+        patterns: ["*"]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]

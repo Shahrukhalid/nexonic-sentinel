@@ -10,3 +10,7 @@ Please report vulnerabilities privately through GitHub (Security tab, "Report a 
 - Model output is treated as untrusted. Findings must point at a real file and line, and @mentions and hidden HTML are removed before anything is posted.
 - AI features are off for every installation until the repository sets `ai = true` in `.github/nexonic-sentinel.toml`. Automatic Dependabot merges are off until the repository lists allowed update types.
 - Public Actions logs show details only for the owner's repositories. The ledger issue stores hashed repository names only.
+- Issue, pull request and discussion text is untrusted. It is only ever sent to the model as data, and the model's reply only becomes comment text: it cannot trigger merges, labels or any other API call.
+- Dependabot merges require a pull request opened by `dependabot[bot]` from a branch of the same repository, with every commit authored by Dependabot, the allowed update type, and every check passing on the exact commit that is merged.
+- Hidden markers the bot uses to avoid repeating itself only count when a bot account wrote them, so pasting one cannot silence a warning.
+- Workflows use pinned action SHAs, least-privilege `permissions:` and no `pull_request_target`. The locked dependencies can be audited with `pip-audit` (see README, Development).
