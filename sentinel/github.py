@@ -107,6 +107,19 @@ class GitHub:
             return None
         raise GitHubError(f"GET {url} -> {r.status_code}")
 
+    def readme(self, repo: str) -> str | None:
+        """The repository's README text (any file name), or None when it has none. Read-only."""
+        url = f"/repos/{repo}/readme"
+        try:
+            r = self.http.get(url, headers={"Accept": "application/vnd.github.raw+json"})
+        except httpx.TransportError as exc:
+            raise GitHubError(f"GET {url} -> {exc.__class__.__name__}") from exc
+        if r.status_code == 200:
+            return r.text
+        if r.status_code == 404:
+            return None
+        raise GitHubError(f"GET {url} -> {r.status_code}")
+
     def tree_entries(self, repo: str, branch: str) -> list[tuple[str, int]]:
         try:
             data = self.get(f"/repos/{repo}/git/trees/{branch}", recursive=1)

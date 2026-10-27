@@ -93,7 +93,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             report = bot.run()
             if home:
-                bot.contributions()
+                bot.growth()
                 if args.digest or now.weekday() == 0 and os.environ.get("GITHUB_EVENT_NAME") == "schedule":
                     bot.digest()
         except Exception as exc:  # noqa: BLE001 - one broken installation must not stop the others
