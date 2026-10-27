@@ -187,7 +187,8 @@ PARSER = "def parse(text):\n    parts = text.split(',')\n    return parts[0]\n"
 def contrib_setup():
     fake = FakeGitHub()
     fake.search = [{"html_url": "https://github.com/acme/tool/issues/5", "number": 5, "title": "Parser crashes on empty input",
-                    "body": "Steps...", "comments": 1, "labels": [{"name": "good first issue"}],
+                    "body": "Steps...", "comments": 1, "updated_at": RECENT,
+                    "assignee": None, "labels": [{"name": "good first issue"}],
                     "repository_url": "https://api.github.com/repos/acme/tool"}]
     fake.ext_repos["acme/tool"] = {"full_name": "acme/tool", "stargazers_count": 900, "pushed_at": RECENT,
                                    "archived": False, "fork": False, "language": "Python", "default_branch": "main",
@@ -203,29 +204,45 @@ GOOD_FIX = {"confident": True, "explanation": "Return None for empty input.", "t
                        "new": "def parse(text):\n    if not text:\n        return None"}]}
 
 
-def test_contribution_hunt_drafts_a_verified_fix_and_runs_hourly():
-    cfg = {**CFG, "contrib": {"every_hours": 1}}
+def test_scout_drafts_a_verified_fix_with_a_repro_note_and_posts_once_a_week():
+    cfg = {**CFG, "contrib": {"max_items": 3}}
     fake = contrib_setup()
     ledger = MemLedger()
-    bot = Sentinel(gh(fake), cfg, llm=fake_llm([DRAFT, GOOD_FIX]), now=NOW, ledger=ledger)
-    bot.contributions()
-    post = [w for w in fake.writes if w[1] == "/repos/owner/nexonic-sentinel/issues"][0][2]
+    fix = {**GOOD_FIX, "repro": "Call parse('').", "where": "src/parser.py parse() indexes parts[0]"}
+    bot = Sentinel(gh(fake), cfg, llm=fake_llm([DRAFT, fix]), now=NOW, ledger=ledger)
+    bot.growth()
+    (method, path, post), = fake.writes
     body = post["body"]
-    assert post["labels"] == ["contribute"] and "Parser crashes on empty input" in body and "★ 900" in body
+    assert path == "/repos/owner/nexonic-sentinel/issues" and post["title"] == "Growth inbox 2026-W44"
+    assert post["labels"] == ["growth"] and "Parser crashes on empty input" in body and "★ 900" in body
     assert "`src/parser.py`" in body and "made/up.py" not in body
     assert "```diff" in body and "+    if not text:" in body and "--- a/src/parser.py" in body
+    assert "How to reproduce: Call parse('')." in body and "Where it likely is: src/parser.py" in body
+    assert "Automated suggestions" in body and "Check each one before acting" in body
     fake.writes.clear()
-    Sentinel(gh(fake), cfg, llm=fake_llm(DRAFT), now=NOW + timedelta(minutes=30), ledger=ledger).contributions()
-    assert fake.writes == []  # not due yet
-    fake.home_issues = [{"number": 7, "body": marker("contribute"), "labels": [{"name": "contribute"}]}]
-    Sentinel(gh(fake), cfg, llm=fake_llm(DRAFT), now=NOW + timedelta(hours=1), ledger=ledger).contributions()
-    assert fake.writes == []  # due, but the only issue was already shown: nothing new to post
+    Sentinel(gh(fake), cfg, llm=fake_llm(DRAFT), now=NOW + timedelta(hours=3), ledger=ledger).growth()
+    assert fake.writes == []  # same week: nothing more
     fake.search[0] = {**fake.search[0], "html_url": "https://github.com/acme/tool/issues/6", "number": 6,
                       "title": "Second bug"}
-    Sentinel(gh(fake), cfg, llm=fake_llm({**DRAFT, "worth_it": True}), now=NOW + timedelta(hours=2),
-             ledger=ledger).contributions()
-    (method, path, data), = fake.writes
-    assert path.endswith("/issues/7/comments") and "Second bug" in data["body"]
+    fake.ext_timeline.clear()
+    Sentinel(gh(fake), cfg, llm=fake_llm([DRAFT, GOOD_FIX]), now=NOW + timedelta(days=7), ledger=ledger).growth()
+    posts = [w for w in fake.writes if w[0] == "POST"]
+    assert posts[0][2]["title"] == "Growth inbox 2026-W45" and "Second bug" in posts[0][2]["body"]
+    assert "Parser crashes" not in posts[0][2]["body"]  # the first issue was already shown: no duplicates
+
+
+def test_previous_inbox_is_closed_automatically():
+    fake = contrib_setup()
+    fake.home_issues = [{"number": 7, "title": "Growth inbox 2026-W43", "state": "open",
+                         "body": marker("growth"), "labels": [{"name": "growth"}], "comments": 0}]
+    Sentinel(gh(fake), CFG, llm=fake_llm([DRAFT, GOOD_FIX]), now=NOW, ledger=MemLedger()).growth()
+    assert ("PATCH", "/repos/owner/nexonic-sentinel/issues/7", {"state": "closed", "state_reason": "completed"}) in fake.writes
+    # re-running in the same week finds the issue by title and posts nothing
+    fake.writes.clear()
+    fake.home_issues = [{"number": 8, "title": "Growth inbox 2026-W44", "state": "open", "body": marker("growth"),
+                         "labels": [{"name": "growth"}], "comments": 0}]
+    Sentinel(gh(fake), CFG, llm=fake_llm(DRAFT), now=NOW, ledger=MemLedger()).growth()
+    assert fake.writes == []
 
 
 def test_fix_rejected_when_it_does_not_match_the_real_file_or_breaks_syntax():
@@ -240,7 +257,7 @@ def test_fix_rejected_when_it_does_not_match_the_real_file_or_breaks_syntax():
     assert not check_syntax("a.py", "def f(:\n")
     fake = contrib_setup()
     broken = {**GOOD_FIX, "edits": [{**GOOD_FIX["edits"][0], "new": "def parse(text:"}]}
-    Sentinel(gh(fake), CFG, llm=fake_llm([DRAFT, broken]), now=NOW, ledger=MemLedger()).contributions()
+    Sentinel(gh(fake), CFG, llm=fake_llm([DRAFT, broken]), now=NOW, ledger=MemLedger()).growth()
     body = [w for w in fake.writes if w[1] == "/repos/owner/nexonic-sentinel/issues"][0][2]["body"]
     assert "Guard empty input" in body and "```diff" not in body
 
