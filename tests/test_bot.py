@@ -29,6 +29,7 @@ class FakeGitHub:
         self.comments: dict[int, list[dict]] = {}
         self.pulls: list[dict] = []
         self.pull_detail: dict[int, dict] = {}
+        self.pr_commits: dict[int, list[dict]] = {}
         self.checks: dict[str, list[dict]] = {}
         self.discussions: list[dict] = []
         self.labels = [{"name": "bug"}, {"name": "question"}, {"name": "enhancement"}]
@@ -68,8 +69,15 @@ class FakeGitHub:
             return httpx.Response(200, json=self.reviews.get(int(path.split("/")[-2]), []))
         if path.startswith("/repos/owner/app/pulls/") and path.endswith("/files"):
             return httpx.Response(200, json=self.pr_files.get(int(path.split("/")[-2]), []))
+        if path.startswith("/repos/owner/app/pulls/") and path.endswith("/commits"):
+            n = int(path.split("/")[-2])
+            return httpx.Response(200, json=self.pr_commits.get(n, [{"sha": "abc", "author": {"login": "dependabot[bot]"}}]))
         if path.startswith("/repos/owner/app/pulls/"):
-            return httpx.Response(200, json=self.pull_detail[int(path.rsplit("/", 1)[1])])
+            n = int(path.rsplit("/", 1)[1])
+            listed = next((p for p in self.pulls if p["number"] == n), {})
+            # Like the API: the detail repeats the author and head of the listed PR (same-repository branch).
+            detail = {"user": listed.get("user"), "head": {**listed.get("head", {}), "repo": {"full_name": "owner/app"}}}
+            return httpx.Response(200, json={**detail, **self.pull_detail[n]})
         if path == "/repos/owner/app/commits/main":
             return httpx.Response(200, json={"sha": "headsha0000000"})
         if path == "/search/issues":
@@ -254,7 +262,8 @@ def test_discussions_skipped_when_owner_replied_or_already_handled_or_sensitive_
         return httpx.Response(500)
 
     fake.discussions = [disc(1, "q", comments=[{"body": "hi", "author": {"login": "owner"}}]),
-                        disc(2, "q", comments=[{"body": marker("discussion"), "author": {"login": "x"}}]),
+                        disc(2, "q", comments=[{"body": marker("discussion"),
+                                                "author": {"login": "nexonic-sentinel", "__typename": "Bot"}}]),
                         disc(3, "Is there a security vulnerability in the token handling?")]
     make(fake, llm=OpenRouter("k", ["m"], transport=httpx.MockTransport(handler))).run()
     graph = [w for w in fake.writes if w[0] == "GRAPHQL"]
