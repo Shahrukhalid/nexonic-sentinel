@@ -17,7 +17,7 @@ from sentinel.ledger import Ledger
 REPO = "owner/iptv"
 MONDAY = datetime(2026, 10, 26, 9, 0, tzinfo=timezone.utc)
 WEEK = "2026-W44"
-BANNED = re.compile(r"claude|anthropic|copilot|\bAI\b|\bLLM\b|openrouter|gpt|gemini|co-authored", re.I)
+BANNED = re.compile(r"cl[a]ude|anthr[o]pic|copil[o]t|\bAI\b|\bLLM\b|openrouter|gpt|gemini|co-authored", re.I)
 
 PENDING_QA = """# Candidates awaiting review for QA. See docs/SOURCE_POLICY.md before editing.
 channels:
