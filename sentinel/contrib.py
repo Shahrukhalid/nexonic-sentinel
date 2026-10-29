@@ -13,7 +13,7 @@ import re
 from datetime import datetime, timedelta
 from typing import Any
 
-from .llm import json_from, safe_text
+from .llm import excluded, json_from, safe_text
 
 LABELS = ('"good first issue"', '"help wanted"', "bug")
 CLAIMED = re.compile(r"(i'?ll take (this|it)|i can take (this|it)|i'?d like to (work on|take|try|fix)|"
@@ -114,8 +114,12 @@ def find(gh, llm, cfg: dict[str, Any], owner: str, now: datetime, seen: set[str]
     for q in queries(languages, owner, since):
         data = gh.get("/search/issues", q=q, sort="updated", order="desc", per_page=15)
         for item in data.get("items", []):
-            if hasher(item["html_url"]) not in seen and "pull_request" not in item:
-                candidates.setdefault(item["html_url"], item)
+            if hasher(item["html_url"]) in seen or "pull_request" in item:
+                continue
+            if excluded(item.get("title"), item.get("body"), item.get("repository_url")):
+                seen.add(hasher(item["html_url"]))
+                continue
+            candidates.setdefault(item["html_url"], item)
     repos: dict[str, dict] = {}
     ranked = []
     for item in list(candidates.values())[:60]:
@@ -128,6 +132,8 @@ def find(gh, llm, cfg: dict[str, Any], owner: str, now: datetime, seen: set[str]
             repos[full] = gh.get(f"/repos/{full}")
         repo = repos[full]
         if repo.get("archived") or repo.get("fork") or repo.get("stargazers_count", 0) < min_stars:
+            continue
+        if excluded(repo.get("description"), *(repo.get("topics") or [])):
             continue
         if (now - _when(repo["pushed_at"])).days > active_days:
             continue

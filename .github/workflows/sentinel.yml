@@ -1,10 +1,20 @@
-# Runs Nexonic Sentinel every 30 minutes for every account that installed the GitHub App.
+# Runs Nexonic Sentinel every 30 minutes (and on new activity in this repository) for every account that
+# installed the GitHub App.
 # Needs: repository variable SENTINEL_CLIENT_ID, secret SENTINEL_PRIVATE_KEY, optional secret OPENROUTER_API_KEY.
 name: Sentinel
 
 on:
   schedule:
     - cron: "7,37 * * * *"
+  # GitHub often delays scheduled runs by hours, so also start right away when someone posts in this repository.
+  issues:
+    types: [opened]
+  issue_comment:
+    types: [created]
+  discussion:
+    types: [created]
+  discussion_comment:
+    types: [created]
   workflow_dispatch:
     inputs:
       dry_run:
@@ -26,6 +36,8 @@ concurrency:
 
 jobs:
   run:
+    # Posts by bots (including this one) never start a run, so the bot cannot trigger itself.
+    if: ${{ !endsWith(github.actor, '[bot]') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:

@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 from typing import Any, Callable
 
 from .ledger import key as lkey
-from .llm import json_from, safe_text
+from .llm import excluded, json_from, safe_text
 
 SKIP_HEADINGS = re.compile(r"^(contents|table of contents|contributing|contribute|license|licence|footnotes?|"
                            r"related|credits|code of conduct|sponsors?)\b", re.I)
@@ -221,6 +221,7 @@ def find_backlinks(gh, llm, cfg: dict[str, Any], owner: str, now: datetime, stat
                 full = lst["full_name"]
                 low = lst["name"].lower()
                 if (len(picks) >= max_items or reads >= max_reads or lst.get("archived") or lst.get("fork")
+                        or excluded(full, lst.get("description"), *(lst.get("topics") or []))
                         or full.split("/", 1)[0].lower() == owner.lower() or (repo["full_name"], full) in seen_lists
                         or not ("awesome" in low or "awesome-list" in (lst.get("topics") or []) or "list" in low)):
                     continue
@@ -293,7 +294,7 @@ def find_discussions(gh, cfg: dict[str, Any], owner: str, now: datetime, seen: s
                 or repo.get("stargazerCount", 0) < min_stars or d["comments"]["totalCount"] > 2
                 or now - _when(d["createdAt"]) > timedelta(days=days)
                 or now - _when(repo.get("pushedAt") or "1970-01-01T00:00:00Z") > timedelta(days=active)
-                or SENSITIVE.search(text)):
+                or SENSITIVE.search(text) or excluded(text, repo.get("nameWithOwner"), repo.get("description"))):
             continue
         age = (now - _when(d["createdAt"])).total_seconds() / 86400
         score = math.log10(repo.get("stargazerCount", 0) + 1) + max(0.0, 1 - age / days) + 1 / (1 + d["comments"]["totalCount"])
