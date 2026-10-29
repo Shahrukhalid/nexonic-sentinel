@@ -125,6 +125,14 @@ GITHUB_TOKEN=... python -m sentinel --dry-run   # a token that can read your rep
 
 CI runs the lint and tests on every push and pull request. Dependabot keeps the locked dependencies and pinned actions current; in this repository those updates are reviewed by hand (see [`.github/nexonic-sentinel.toml`](.github/nexonic-sentinel.toml)) because its Actions hold the App's private key.
 
+## Roadmap
+
+Planned work that contributors can pick up. Each item becomes an issue with details; comment there to take it on.
+
+- [ ] Weekly activity page on GitHub Pages showing what the bot did in each repository
+- [ ] Reply templates per repository for issue triage, set in .github/nexonic-sentinel.toml
+- [ ] Digest section listing contributor pull requests that have waited more than a week
+
 ## Licence
 
 MIT
