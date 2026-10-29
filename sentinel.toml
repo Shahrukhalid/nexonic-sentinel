@@ -106,3 +106,37 @@ owner_login = "Shahrukhalid" # the only account whose commands are carried out
 suggestions = true           # turn valid suggestion issues into pending records
 broken_reports = true        # answer broken-stream reports with the latest status
 max_rows = 80                # most records listed in the weekly issue
+
+[autopilot]
+# Automatic work on the owner's own public repositories (never on anyone else's). Each part runs at most once a week
+# per repository, inside the normal AI budget. Set enabled = false here (or in a part) to stop it.
+enabled = true
+
+[autopilot.fixer]
+# Reads a few source files a week and opens a pull request (label `autofix`) for a confident fix that applies cleanly.
+# Fixes of at most automerge_max_lines changed lines get the `automerge` label and are squash-merged once every
+# check passes; add the `hold` label to stop that. Repositories without CI checks are never merged automatically.
+enabled = true
+files_per_week = 2
+max_open = 2
+automerge_max_lines = 6
+max_file_bytes = 15000
+
+[autopilot.seo]
+# Weekly "SEO report" issue in the home repository with a score per repository. Descriptions and topics are applied
+# directly when the GitHub App has the Administration (read and write) permission; otherwise they are suggested.
+enabled = true
+apply = true
+
+[autopilot.contributors]
+# Turns unchecked roadmap items ("- [ ] ..." in ROADMAP.md or the README) into `help wanted` issues with clear specs.
+enabled = true
+per_week = 2
+
+[autopilot.promote]
+# Announces each new GitHub release on the owner's own accounts whose secrets are set: BLUESKY_HANDLE +
+# BLUESKY_APP_PASSWORD, MASTODON_INSTANCE + MASTODON_TOKEN, DEV_API_KEY (Dev.to article, saved as a draft unless
+# publish_devto = true).
+enabled = true
+max_age_days = 7
+publish_devto = false

@@ -70,6 +70,25 @@ Each suggestion appears once (a ledger of hashed URLs prevents repeats) and ever
 
 Backlinks and Discussions are off unless their `enabled = true` is set. The top-level `enabled = false` stops everything. **Models:** `models = ["all-free"]` uses every free text model on OpenRouter, fetched live each run, so new free models are picked up automatically. Bigger models can be listed first. OpenRouter allows 50 free-model requests a day on a key without credits and 1,000 once the account has bought $10 of credits; `daily_llm_budget = "auto"` detects which applies.
 
+## Autopilot (owner only)
+
+On the owner's own public repositories, once a week each:
+
+- **Fixer:** reads a couple of source files, and when it finds a clear bug with a fix that applies cleanly (and still
+  parses, for Python), opens a pull request labelled `autofix`. Fixes of a few lines are squash-merged once every
+  check passes; add the `hold` label to stop that. Repositories without CI are never merged automatically.
+- **SEO:** one "SEO report" issue with a 0-100 score per repository (description, topics, website link, README
+  structure, licence, contributing guide). Descriptions and topics are applied directly when the app has the
+  Administration permission, otherwise suggested.
+- **Contributors:** unchecked roadmap items (`- [ ] ...` in `ROADMAP.md` or the README) become clearly specified
+  `help wanted` issues, marked `good first issue` when they are small.
+- **Releases:** each new GitHub release is announced on the owner's own Bluesky and Mastodon accounts and drafted as a
+  Dev.to article, for whichever of these have their secrets set (`BLUESKY_HANDLE` and `BLUESKY_APP_PASSWORD`,
+  `MASTODON_INSTANCE` and `MASTODON_TOKEN`, `DEV_API_KEY`).
+
+Settings are in the `[autopilot]` sections of [`sentinel.toml`](sentinel.toml). Nothing here posts in other people's
+projects.
+
 ## Channel review (owner only)
 
 For the owner's IPTV catalogue ([`nexonic-iptv`](https://github.com/Shahrukhalid/nexonic-iptv)), Nexonic Sentinel runs a small review workflow. It is off unless `[iptv_review] enabled = true`, it only works in the one repository named there (which must belong to the owner), and it stops at the first thing it is unsure about.
