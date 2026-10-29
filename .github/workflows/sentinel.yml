@@ -52,6 +52,12 @@ jobs:
           SENTINEL_CLIENT_ID: ${{ vars.SENTINEL_CLIENT_ID }}
           SENTINEL_PRIVATE_KEY: ${{ secrets.SENTINEL_PRIVATE_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          # Optional: release announcements on the owner's own accounts (sentinel.toml [autopilot.promote]).
+          BLUESKY_HANDLE: ${{ secrets.BLUESKY_HANDLE }}
+          BLUESKY_APP_PASSWORD: ${{ secrets.BLUESKY_APP_PASSWORD }}
+          MASTODON_INSTANCE: ${{ secrets.MASTODON_INSTANCE }}
+          MASTODON_TOKEN: ${{ secrets.MASTODON_TOKEN }}
+          DEV_API_KEY: ${{ secrets.DEV_API_KEY }}
           SENTINEL_DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
         run: python -m sentinel ${{ inputs.digest && '--digest' || '' }}
       - name: Keep the schedule alive

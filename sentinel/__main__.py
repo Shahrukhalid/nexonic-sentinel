@@ -16,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable
 
+from .autopilot import Autopilot
 from .bot import Report, Sentinel
 from .github import GitHub
 from .ledger import Ledger
@@ -95,6 +96,7 @@ def main(argv: list[str] | None = None) -> int:
             if home:
                 bot.growth()
                 bot.iptv_review()
+                Autopilot(bot, dict(os.environ)).run()
                 if args.digest or now.weekday() == 0 and os.environ.get("GITHUB_EVENT_NAME") == "schedule":
                     bot.digest()
         except Exception as exc:  # noqa: BLE001 - one broken installation must not stop the others
