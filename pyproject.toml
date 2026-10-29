@@ -1,6 +1,6 @@
 [project]
 name = "nexonic-sentinel"
-version = "0.3.0"
+version = "0.4.0"
 description = "Automated maintainer assistant for GitHub: triage, answers from your docs, safe dependency merges"
 readme = "README.md"
 license = { text = "MIT" }
