@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 
 import httpx
 
@@ -169,3 +170,27 @@ def test_helpers():
     assert clean_topics(["A B", "a-b", "x" * 60, "ok"]) == ["a-b", "x" * 50, "ok"]
     score, missing = seo_score({"description": "short"}, "# T\n", {"LICENSE"})
     assert score == 20 and "at least 5 topics" in missing
+
+
+def test_gone_models_are_skipped_and_ai_outages_never_fail_the_run():
+    from sentinel.llm import OpenRouter
+
+    calls = []
+
+    def handler(req):
+        model = json.loads(req.content)["model"]
+        calls.append(model)
+        if model in ("gone-1", "gone-2", "gone-3", "gone-4"):
+            return httpx.Response(403 if model != "gone-4" else 404)
+        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(FIX)}}]})
+    llm = OpenRouter("k", ["gone-1", "gone-2", "gone-3", "gone-4", "works"], transport=httpx.MockTransport(handler))
+    assert json.loads(llm.complete("s", "u"))["confident"]  # four refusals did not use up the attempts
+    assert calls == ["gone-1", "gone-2", "gone-3", "gone-4", "works"]
+    llm.complete("s", "u")
+    assert calls[-1] == "works" and len(calls) == 6  # refused models are not asked again this run
+
+    gh = FakeGH()
+    down = OpenRouter("k", ["m"], transport=httpx.MockTransport(lambda r: httpx.Response(500)))
+    bot, ap = make(gh, down)
+    ap.run()
+    assert not bot.report.errors and any("no AI model answered" in f for f in bot.report.flagged)

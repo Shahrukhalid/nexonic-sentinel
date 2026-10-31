@@ -128,6 +128,13 @@ class OpenRouter:
                 self.limited.add(model)
                 last = f"{model}: HTTP 429"
                 continue
+            if r.status_code in (400, 401, 403, 404):
+                # this model is gone, gated or refuses the account: skip it for the rest of the run and try the
+                # next one without using up an attempt
+                self.limited.add(model)
+                tries -= 1
+                last = f"{model}: HTTP {r.status_code}"
+                continue
             if r.status_code != 200:
                 last = f"{model}: HTTP {r.status_code}"
                 continue
