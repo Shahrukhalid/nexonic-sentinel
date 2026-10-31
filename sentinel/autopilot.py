@@ -16,7 +16,7 @@ import httpx
 from . import contrib, review
 from .github import GitHubError
 from .ledger import key as lkey
-from .llm import LLMQuotaExceeded, excluded, json_from, safe_text
+from .llm import LLMError, LLMQuotaExceeded, excluded, json_from, safe_text
 
 FIX_LABEL = "autofix"
 FIND_AND_FIX = """You are a careful senior engineer. Read one source file (lines are numbered "12| code") and find the
@@ -150,6 +150,10 @@ class Autopilot:
                 except LLMQuotaExceeded:
                     self.bot.report.flagged.append("Autopilot paused until the next run (daily AI limit reached)")
                     return
+                except LLMError as exc:  # no free model answered: try again next run, don't fail the workflow
+                    note = f"Autopilot {name}: no AI model answered this run ({str(exc)[:120]})"
+                    if note not in self.bot.report.flagged:
+                        self.bot.report.flagged.append(note)
                 except (GitHubError, httpx.HTTPError, ValueError, KeyError) as exc:
                     self.bot._error(repo, f"autopilot {name}", exc)
             self.merge_ready(repo)
@@ -158,6 +162,8 @@ class Autopilot:
                 self.seo(repos)
             except LLMQuotaExceeded:
                 self.bot.report.flagged.append("SEO report paused until the next run (daily AI limit reached)")
+            except LLMError as exc:
+                self.bot.report.flagged.append(f"SEO report: no AI model answered this run ({str(exc)[:120]})")
             except (GitHubError, ValueError) as exc:
                 self.bot.report.errors.append(f"autopilot seo: {exc}")
 
