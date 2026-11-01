@@ -194,3 +194,26 @@ def test_gone_models_are_skipped_and_ai_outages_never_fail_the_run():
     bot, ap = make(gh, down)
     ap.run()
     assert not bot.report.errors and any("no AI model answered" in f for f in bot.report.flagged)
+
+
+def test_repo_health_pr_proposes_missing_community_files_once():
+    gh = FakeGH()
+    bot, ap = make(gh, None)
+    ap.health(gh.repo)
+    puts = [w[1] for w in gh.writes if w[0] == "PUT"]
+    assert "/repos/owner/app/contents/CONTRIBUTING.md" in puts
+    assert "/repos/owner/app/contents/.github/ISSUE_TEMPLATE/bug_report.yml" in puts
+    pr = next(w for w in gh.writes if w[1].endswith("/pulls"))
+    assert pr[2]["head"] == "sentinel/repo-health"
+    assert ("LABEL", "owner/app#7", {"labels": ["repo-health"]}) in gh.writes
+    n = len(gh.writes)
+    ap.health(gh.repo)  # never proposed twice
+    assert len(gh.writes) == n
+
+
+def test_repo_health_does_nothing_when_files_exist():
+    gh = FakeGH()
+    gh.files.update({"CONTRIBUTING.md": "x", ".github/ISSUE_TEMPLATE/bug.yml": "x", ".github/pull_request_template.md": "x"})
+    bot, ap = make(gh, None)
+    ap.health(gh.repo)
+    assert gh.writes == []

@@ -13,7 +13,7 @@ from typing import Any
 
 import httpx
 
-from . import contrib, review
+from . import contrib, health, review
 from .github import GitHubError
 from .ledger import key as lkey
 from .llm import LLMError, LLMQuotaExceeded, excluded, json_from, safe_text
@@ -140,7 +140,8 @@ class Autopilot:
     def run(self) -> None:
         skip = set(self.bot.cfg.get("skip_repos", []))
         repos = [r for r in self.bot.gh.repos() if r["name"] not in skip and not r.get("private")]
-        steps = [("fixer", self.fixer), ("contributors", self.contributors), ("promote", self.promote)]
+        steps = [("fixer", self.fixer), ("contributors", self.contributors), ("promote", self.promote),
+                 ("health", self.health)]
         for repo in repos:
             for name, step in steps:
                 if not self.on(name):
@@ -246,6 +247,44 @@ class Autopilot:
 
         self.bot._write(f"{name}: open fix PR for {path} ({changed} changed lines)", do)
         return True
+
+    def health(self, repo: dict) -> None:
+        """Once per repository: propose the community files it is missing (contributing guide, issue forms, PR template)."""
+        name, base = repo["full_name"], repo.get("default_branch", "main")
+        done = lkey("auto", "health-done", name)
+        if self.bot.ledger is None or self.bot.ledger.get(done) or repo.get("archived") or repo.get("fork"):
+            return
+        gh = self.bot.gh
+        files = health.missing_files(gh.tree(name, base), repo["name"], base)
+        branch = "sentinel/repo-health"
+        if files:
+            try:
+                gh.get(f"/repos/{name}/git/ref/heads/{branch}")
+                files = {}  # already proposed
+            except GitHubError:
+                pass
+        if files:
+            listing = "\n".join(f"- `{p}`" for p in files)
+            body = (f"{self.bot_marker('repo-health')}This repository is missing a few community files that help "
+                    f"people report bugs and contribute. This pull request adds:\n\n{listing}\n\nThey are generic "
+                    "starting points: edit them as you like before merging, or close this pull request to skip it. "
+                    "It won't be proposed again.\n\n<sub>Proposed once by Nexonic Sentinel's weekly repository check.</sub>")
+
+            def do() -> None:
+                head = gh.get(f"/repos/{name}/git/ref/heads/{base}")["object"]["sha"]
+                gh.request("POST", f"/repos/{name}/git/refs", json={"ref": f"refs/heads/{branch}", "sha": head})
+                for path, text in files.items():
+                    gh.request("PUT", f"/repos/{name}/contents/{path}",
+                               json={"message": f"Add {path}", "branch": branch,
+                                     "content": base64.b64encode(text.encode("utf-8")).decode("ascii")})
+                pr = gh.request("POST", f"/repos/{name}/pulls",
+                                json={"title": "Add contributing guide and issue forms", "head": branch, "base": base,
+                                      "body": body})
+                gh.add_labels(name, pr["number"], ["repo-health"])
+
+            self.bot._write(f"{name}: propose community files ({len(files)})", do)
+        if not self.bot.dry:
+            self.bot.ledger.set(done, self.bot.now.date().isoformat())
 
     def bot_marker(self, kind: str) -> str:
         return f"<!-- nexonic-sentinel:{kind} -->\n"

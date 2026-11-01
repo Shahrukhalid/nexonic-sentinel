@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
-from . import contrib, growth, iptv, knowledge, review
+from . import contrib, growth, insights, iptv, knowledge, review
 from . import settings as repo_settings
 from .github import GitHub, GitHubError
 from .ledger import Ledger
@@ -81,6 +81,13 @@ def bump_kind(title: str, body: str = "") -> str | None:
     if not kinds or None in kinds:
         return None
     return max(kinds, key=RANK.__getitem__)
+
+
+class _SafeDict(dict):
+    """Unknown {placeholders} in a custom template stay as written instead of failing."""
+
+    def __missing__(self, key: str) -> str:
+        return "{" + key + "}"
 
 
 @dataclass
@@ -216,22 +223,35 @@ class Sentinel:
             body = self._triage_text(repo, issue, text, wanted)
             self._write(f"{name}#{issue['number']}: triage comment", self.gh.comment, name, issue["number"], body)
 
+    def _tpl(self, repo: dict, key: str, default: str, **values: Any) -> str:
+        """The repository's own wording from [templates] in its settings file, or the default text."""
+        text = self.settings(repo).get("templates", {}).get(key) or default
+        values.setdefault("repo", repo["full_name"])
+        try:
+            return text.format_map(_SafeDict({k: str(v) for k, v in values.items()}))
+        except (ValueError, IndexError):  # a stray brace in a custom template: show it as written
+            return text
+
     def _triage_text(self, repo: dict, issue: dict, text: str, labels: list[str]) -> str:
         who = issue["user"]["login"]
-        lines = [marker("triage"), f"Thanks for opening this, @{who}!"]
+        vals = {"author": f"@{who}", "issue": f"#{issue['number']}", "labels": ", ".join(labels) or "none"}
+        lines = [marker("triage"), self._tpl(repo, "greeting", "Thanks for opening this, {author}!", **vals)]
         if SENSITIVE.search(text):
-            lines.append("This looks security-related. If it is a vulnerability, please don't share details publicly: "
-                         "use the repository's private vulnerability reporting (see SECURITY.md). "
-                         f"{self.They} has been notified.")
+            lines.append(self._tpl(repo, "security",
+                                   "This looks security-related. If it is a vulnerability, please don't share details "
+                                   "publicly: use the repository's private vulnerability reporting (see SECURITY.md). "
+                                   f"{self.They} has been notified.", **vals))
             self.report.flagged.append(f"{repo['full_name']}#{issue['number']} (possible security report)")
         else:
             if "bug" in [label.lower() for label in labels] and len(issue.get("body") or "") < 200:
-                lines.append("To help reproduce it, please add: the version or commit you're using, your OS, "
-                             "the exact steps, what you expected, and any error output or logs.")
+                lines.append(self._tpl(repo, "bug_repro",
+                                       "To help reproduce it, please add: the version or commit you're using, your OS, "
+                                       "the exact steps, what you expected, and any error output or logs.", **vals))
             hits = knowledge.best_excerpts(text, self._docs_for(repo), k=3)
             if hits:
-                lines.append("These docs may already cover it:\n" + self._doc_links(repo, [p for p, _ in hits]))
-            lines.append(f"{self.They} will take a look.")
+                lines.append(self._tpl(repo, "docs_intro", "These docs may already cover it:", **vals) + "\n"
+                             + self._doc_links(repo, [p for p, _ in hits]))
+            lines.append(self._tpl(repo, "closing", f"{self.They} will take a look.", **vals))
         return "\n\n".join(lines) + FOOTER
 
     # ------------------------------------------------------------------ pull requests
@@ -261,7 +281,9 @@ class Sentinel:
         if pr.get("author_association") not in NEW_CONTRIBUTOR or self._has_marker(name, n, "welcome"):
             return
         tested = re.search(r"\btest", pr.get("body") or "", re.I)
-        body = (f"{marker('welcome')}Thank you for your first contribution, @{pr['user']['login']}! "
+        greet = self._tpl(repo, "welcome", "Thank you for your first contribution, {author}!",
+                          author=f"@{pr['user']['login']}", issue=f"#{n}", labels="")
+        body = (f"{marker('welcome')}{greet} "
                 f"{self.They} will review it soon. Checks for pull requests from forks only start after a maintainer "
                 "approves them, so a short wait is normal."
                 + ("" if tested else " Please make sure the tests pass and describe how you tested the change.")
@@ -661,6 +683,7 @@ class Sentinel:
         if any(i["title"] == title for i in existing):
             return
         rows = []
+        info_rows: list[dict] = []
         skip = set(self.cfg.get("skip_repos", []))
         for repo in self.gh.repos():
             if repo["name"] in skip:
@@ -672,8 +695,13 @@ class Sentinel:
             prs = self.gh.paged(f"/repos/{name}/pulls", state="open", limit=100)
             rows.append(f"| [{repo['name']}](https://github.com/{name}) | {repo.get('stargazers_count', 0)} | "
                         f"{len(issues)} | {len(prs)} |")
+            if not repo.get("private"):
+                info = insights.repo_insights(self.gh, repo, self.now, self.owner, prs)
+                info.update(issues=len(issues), prs=len(prs))
+                info_rows.append(info)
         body = ("Open work across your repositories.\n\n| Repository | Stars | Open issues | Open PRs |\n|---|---|---|---|\n"
-                + "\n".join(rows) + "\n\n**Waiting on you this run**\n"
+                + "\n".join(rows) + "\n\n" + insights.digest_sections(info_rows)
+                + "\n\n**Waiting on you this run**\n"
                 + ("\n".join(f"- {f}" for f in self.report.flagged) or "- Nothing") + FOOTER)
         self._write(f"{home}: create {title}", self.gh.request, "POST", f"/repos/{home}/issues",
                     json={"title": title, "body": body, "labels": ["digest"]})
@@ -682,3 +710,18 @@ class Sentinel:
             if old.get("state") == "open" and old["title"] != title and is_bot(old.get("user")):
                 self._write(f"{home}#{old['number']}: close previous digest", self.gh.request, "PATCH",
                             f"/repos/{home}/issues/{old['number']}", json={"state": "closed", "state_reason": "completed"})
+        if self.cfg.get("activity_page", True) and info_rows:
+            self.activity_page(home, info_rows, week)
+
+    def activity_page(self, home: str, rows: list[dict], week: str) -> None:
+        """Public weekly status page in the home repository's GitHub Pages folder (docs/activity.html)."""
+        counts = {"repositories": len(rows), "open issues": sum(r["issues"] for r in rows),
+                  "open pull requests": sum(r["prs"] for r in rows),
+                  "waiting on a review": sum(len(r["stale"]) for r in rows),
+                  "failing main branches": sum(1 for r in rows if r["failing"])}
+        page = insights.activity_html(rows, counts, week, self.now.strftime("%Y-%m-%d %H:%M UTC"))
+        try:
+            self._write(f"{home}: update docs/activity.html", insights.publish_page, self.gh, home,
+                        "docs/activity.html", page, f"Activity page {week}")
+        except GitHubError as exc:
+            self.report.errors.append(f"activity page: {exc}")

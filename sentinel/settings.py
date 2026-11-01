@@ -13,6 +13,8 @@ from typing import Any
 FILE = ".github/nexonic-sentinel.toml"
 BOOLS = ("enabled", "triage", "welcome", "discussions", "ai", "pr_review", "code_scan")
 UPDATE_KINDS = {"patch", "minor", "major"}
+TEMPLATE_KEYS = ("greeting", "bug_repro", "security", "docs_intro", "closing", "welcome")
+TEMPLATE_MAX = 1500  # characters per template
 
 PUBLIC_DEFAULTS: dict[str, Any] = {
     "enabled": True, "triage": True, "welcome": True, "discussions": True,
@@ -54,6 +56,10 @@ def parse(text: str | None, base: dict[str, Any]) -> dict[str, Any]:
     for key in BOOLS:
         if isinstance(data.get(key), bool):
             out[key] = data[key]
+    tpl = data.get("templates")
+    if isinstance(tpl, dict):
+        out["templates"] = {k: v.strip()[:TEMPLATE_MAX] for k, v in tpl.items()
+                            if k in TEMPLATE_KEYS and isinstance(v, str) and v.strip()}
     if "dependabot" in data:
         dep = data["dependabot"]
         ok = isinstance(dep, list) and all(isinstance(x, str) for x in dep)
@@ -70,4 +76,13 @@ ai = false          # allow sending issue, discussion and code text to free Open
 pr_review = true    # AI bug review of pull requests (needs ai = true)
 code_scan = true    # weekly AI code health report (needs ai = true)
 dependabot = []     # Dependabot updates to merge once all checks pass, e.g. ["patch", "minor"]
+
+# Optional: your own wording for replies. Placeholders: {author} {issue} {repo} {labels}
+# [templates]
+# greeting = "Hi {author}, thanks for reporting this in {repo}!"
+# bug_repro = "Please add your version, OS, the steps and any error output."
+# security = "Please report vulnerabilities privately, see SECURITY.md."
+# docs_intro = "These pages may help:"
+# closing = "A maintainer will reply soon."
+# welcome = "Thanks for your first pull request, {author}!"
 """

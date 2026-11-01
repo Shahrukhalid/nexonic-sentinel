@@ -7,6 +7,7 @@ enabled = true                # false = the bot does nothing (emergency stop)
 home_repo = "nexonic-sentinel"
 skip_repos = ["Shahrukhalid"] # repositories the bot ignores (profile README)
 lookback_hours = 72           # only new issues, PRs and discussions from this window
+activity_page = true          # Monday: publish docs/activity.html (public status of every public repository)
 
 # AI budget. "auto" reads the OpenRouter key: 45 requests a day and 8 a run on a key without credits,
 # 950 a day and 30 a run once the account has bought credits (OpenRouter then allows 1000 free requests a day).
@@ -132,6 +133,11 @@ apply = true
 # Turns unchecked roadmap items ("- [ ] ..." in ROADMAP.md or the README) into `help wanted` issues with clear specs.
 enabled = true
 per_week = 2
+
+[autopilot.health]
+# Once per repository: a pull request (label `repo-health`) adding whatever is missing from a contributing guide, bug
+# and feature issue forms and a pull request template. Closing it skips that repository for good.
+enabled = true
 
 [autopilot.promote]
 # Announces each new GitHub release on the owner's own accounts whose secrets are set: BLUESKY_HANDLE +

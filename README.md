@@ -38,6 +38,15 @@ code_scan = true    # weekly AI code health report (needs ai = true)
 dependabot = []     # Dependabot updates to merge once all checks pass, e.g. ["patch", "minor"]
 ```
 
+Optional `[templates]` set your own wording for replies (`greeting`, `bug_repro`, `security`, `docs_intro`, `closing`,
+`welcome`), with the placeholders `{author}`, `{issue}`, `{repo}` and `{labels}`:
+
+```toml
+[templates]
+greeting = "Hi {author}, thanks for reporting this in {repo}!"
+closing = "We usually reply within two days."
+```
+
 Without the file, the defaults are the values shown. To stop the bot on a single thread, add the `bot-off` label, or write `bot-off` in a discussion. Uninstalling the app removes all of its access.
 
 ## Privacy and data
@@ -88,6 +97,15 @@ On the owner's own public repositories, once a week each:
   Dev.to article, for whichever of these have their secrets set (`BLUESKY_HANDLE` and `BLUESKY_APP_PASSWORD`,
   `MASTODON_INSTANCE` and `MASTODON_TOKEN`, `DEV_API_KEY`).
 
+- **Community files:** once per repository, proposes a pull request (label `repo-health`) with whatever is missing
+  from a contributing guide, bug and feature issue forms and a pull request template. Close it to skip; it is never
+  proposed again.
+
+**Monday digest:** one issue in the home repository with open work per repository, contributor pull requests waiting
+more than 7 days, failing checks on each main branch, commits not released yet and open security alerts (needs the
+app's "Dependabot alerts: read" permission). The same overview is published as a public
+[activity page](https://shahrukhalid.github.io/nexonic-sentinel/activity.html) (`activity_page = false` turns it off).
+
 Settings are in the `[autopilot]` sections of [`sentinel.toml`](sentinel.toml). Nothing here posts in other people's
 projects.
 
@@ -131,9 +149,9 @@ CI runs the lint and tests on every push and pull request. Dependabot keeps the 
 
 Planned work that contributors can pick up. Each item becomes an issue with details; comment there to take it on.
 
-- [ ] Weekly activity page on GitHub Pages showing what the bot did in each repository
-- [ ] Reply templates per repository for issue triage, set in .github/nexonic-sentinel.toml
-- [ ] Digest section listing contributor pull requests that have waited more than a week
+- [x] Weekly activity page on GitHub Pages showing what the bot did in each repository
+- [x] Reply templates per repository for issue triage, set in .github/nexonic-sentinel.toml
+- [x] Digest section listing contributor pull requests that have waited more than a week
 
 ## Licence
 
