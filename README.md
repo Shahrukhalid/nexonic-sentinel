@@ -16,6 +16,7 @@
 | Where | What happens | Needs `ai = true` |
 |---|---|---|
 | New issues | Adds matching labels (`bug`, `enhancement`, `question`, `documentation`) when they exist, thanks the author, asks for reproduction details on short bug reports and links the docs that look relevant. Possible security reports are pointed to private vulnerability reporting. | no |
+| Comments on issues | Replies once to new comments from other people on open issues: thanks, answers from your docs, or "the maintainer will decide". It never changes, labels, closes or merges anything because of a comment; each decision goes on one **Waiting on you** issue in the bot's repository and leaves it when you reply on the thread, close it, or tick its box. Off by default for other accounts (`replies = true`). | AI replies only |
 | Pull requests | Welcomes first-time contributors. **Bug review:** on every new commit it reads the changed lines and posts the concrete bugs it finds (file, line, why, suggested fix), plus any failing checks. It only comments: it never approves, blocks or pushes code. | review only |
 | Weekly code health | Reads a different few source files each week and opens one "Code health report" issue when it finds likely bugs. Findings already reported are never repeated. | yes |
 | Discussions (Q&A) | Answers from your README and `docs/` only, lists its sources, and says so when the docs don't cover it instead of guessing. Ideas get a thank-you. | AI answers only |
@@ -32,6 +33,7 @@ enabled = true      # false = Nexonic Sentinel leaves this repository alone
 triage = true       # label new issues and point to relevant docs
 welcome = true      # welcome first-time contributors
 discussions = true  # reply in Q&A discussions (AI answers need ai = true)
+replies = false     # reply to new comments on open issues (decisions are left to you)
 ai = false          # allow sending issue, discussion and code text to free OpenRouter models
 pr_review = true    # AI bug review of pull requests (needs ai = true)
 code_scan = true    # weekly AI code health report (needs ai = true)
@@ -47,7 +49,7 @@ greeting = "Hi {author}, thanks for reporting this in {repo}!"
 closing = "We usually reply within two days."
 ```
 
-Without the file, the defaults are the values shown. To stop the bot on a single thread, add the `bot-off` label, or write `bot-off` in a discussion. Uninstalling the app removes all of its access.
+Without the file, the defaults are the values shown. To stop the bot on a single thread, add the `bot-off` label, or write `bot-off` in a discussion or comment. Uninstalling the app removes all of its access.
 
 ## Privacy and data
 

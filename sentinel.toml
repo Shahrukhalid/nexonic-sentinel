@@ -34,6 +34,12 @@ ai = true          # allow sending issue, discussion and code text to the models
 pr_review = true   # AI bug review of each new pull request commit
 code_scan = true   # weekly code health report (a different set of files each week)
 
+[replies]
+# Replies to new comments by other people on open issues: thanks, answers from the docs, and "the maintainer will
+# decide" for anything else. The bot never changes, closes or merges anything because of a comment: each decision
+# goes on one "Waiting on you" issue in this repository until you reply on the thread, close it, or tick its box.
+max_per_run = 10
+
 [review]
 min_severity = "medium"   # high | medium | low
 max_files = 30            # larger pull requests are skipped

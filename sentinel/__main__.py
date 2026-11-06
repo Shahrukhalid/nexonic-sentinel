@@ -94,6 +94,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             report = bot.run()
             if home:
+                bot.waiting_issue()
                 bot.growth()
                 bot.iptv_review()
                 Autopilot(bot, dict(os.environ)).run()
