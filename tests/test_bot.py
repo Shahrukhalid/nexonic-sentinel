@@ -32,6 +32,7 @@ class FakeGitHub:
                      "has_discussions": True, "archived": False, "fork": False, "stargazers_count": 3}
         self.issues: list[dict] = []
         self.comments: dict[int, list[dict]] = {}
+        self.repo_comments: list[dict] = []  # GET /repos/owner/app/issues/comments (new comments on any issue)
         self.pulls: list[dict] = []
         self.pull_detail: dict[int, dict] = {}
         self.pr_commits: dict[int, list[dict]] = {}
@@ -73,6 +74,11 @@ class FakeGitHub:
             return httpx.Response(200, json=self.labels)
         if path == "/repos/owner/app/issues":
             return httpx.Response(200, json=self.issues)
+        if path == "/repos/owner/app/issues/comments":
+            return httpx.Response(200, json=self.repo_comments)
+        if path.startswith("/repos/owner/app/issues/") and path.rsplit("/", 1)[1].isdigit():
+            n = int(path.rsplit("/", 1)[1])
+            return httpx.Response(200, json=next(i for i in self.issues if i["number"] == n))
         if path.startswith("/repos/owner/app/issues/") and path.endswith("/comments"):
             return httpx.Response(200, json=self.comments.get(int(path.split("/")[-2]), []))
         if path == "/repos/owner/app/pulls":

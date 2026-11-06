@@ -55,6 +55,22 @@ def bot_marked(comments: list[dict], kind: str, author_key: str = "user") -> boo
                for c in comments)
 
 
+THANKS = re.compile(r"\b(thanks?|thank you|great|awesome|works?( now| fine| great)?|good|flawless|perfect|love)\b", re.I)
+QUESTION = re.compile(r"\?|\b(how|why|when|where|can (i|you)|could you|is there)\b", re.I)
+WAIT_MARK = "<!-- nexonic-sentinel:waiting -->"
+TICKED = re.compile(r"^- \[[xX]\] \[[^\]]*\]\(([^)\s]+)\)", re.M)
+
+
+def _issue_number(issue_url: str) -> int:
+    m = re.search(r"/issues/(\d+)$", issue_url)
+    return int(m.group(1)) if m else 0
+
+
+def _table_get(cfg: dict[str, Any], table: str, key: str, default: Any) -> Any:
+    t = cfg.get(table)
+    return t.get(key, default) if isinstance(t, dict) else default
+
+
 RANK = {"patch": 0, "minor": 1, "major": 2}
 BUMP_LINE = re.compile(r"^\s*(?:Updates|Bumps)\b.*$", re.I | re.M)
 
@@ -121,6 +137,8 @@ class Sentinel:
         self.ai_start = llm.calls if llm else 0
         self._docs: dict[str, dict[str, str]] = {}
         self._settings: dict[str, dict[str, Any]] = {}
+        self.waiting: list[dict[str, Any]] = []  # decisions for the owner, listed in the "Waiting on you" issue
+        self.replies_left = int(_table_get(cfg, "replies", "max_per_run", 10))
 
     # ------------------------------------------------------------------ helpers
     def _write(self, description: str, fn: Callable, *args, **kwargs) -> Any:
@@ -183,6 +201,8 @@ class Sentinel:
             steps.append(self.pulls)
             if s["discussions"]:
                 steps.append(self.discussions)
+            if s.get("replies"):
+                steps.append(self.comments)
             if s["ai"] and s["code_scan"]:
                 steps.append(self.code_scan)
             for step in steps:
@@ -253,6 +273,129 @@ class Sentinel:
                              + self._doc_links(repo, [p for p, _ in hits]))
             lines.append(self._tpl(repo, "closing", f"{self.They} will take a look.", **vals))
         return "\n\n".join(lines) + FOOTER
+
+    # ------------------------------------------------------------------ comments
+    def comments(self, repo: dict) -> None:
+        """Reply once to new comments by other people on open issues. The bot only answers and thanks; anything
+        that needs a decision or a change goes on the owner's "Waiting on you" list, and nothing is changed."""
+        name = repo["full_name"]
+        if not repo.get("has_issues", True) or repo.get("private"):
+            return  # private repositories stay out of the public "Waiting on you" list
+        recent = self.gh.paged(f"/repos/{name}/issues/comments", since=self.since.isoformat(), sort="created",
+                               direction="asc", limit=100)
+        threads: dict[int, None] = {}
+        for c in recent:
+            n = _issue_number(c.get("issue_url") or "")
+            if n and self._recent(c.get("created_at") or "1970-01-01T00:00:00Z") and not is_bot(c.get("user")) \
+                    and (c.get("user") or {}).get("login") != self.owner:
+                threads[n] = None
+        for n in threads:
+            if self.replies_left <= 0:
+                self.report.flagged.append("Comment replies paused until the next run (per-run limit reached)")
+                return
+            self._reply_thread(repo, n)
+
+    def _reply_thread(self, repo: dict, n: int) -> None:
+        name = repo["full_name"]
+        issue = self.gh.get(f"/repos/{name}/issues/{n}")
+        labels = {lab["name"].lower() for lab in issue.get("labels", [])}
+        text = f"{issue.get('title', '')}\n{issue.get('body') or ''}"
+        if (issue.get("state") != "open" or "pull_request" in issue or issue.get("locked") or "bot-off" in labels
+                or "bot-off" in text or labels & {"digest", "ledger", "code-health", "contribute", "growth",
+                                                  "channel-review", "waiting"}):
+            return
+        if name.lower() == self._iptv_repo() and (iptv.is_suggestion(issue) or iptv.is_broken_report(issue)):
+            return  # the channel review answers these itself
+        comments = self.gh.paged(f"/repos/{name}/issues/{n}/comments", limit=300)
+        # Only what was said after the last word from the owner or the bot.
+        last = -1
+        for i, c in enumerate(comments):
+            if is_bot(c.get("user")) or (c.get("user") or {}).get("login") == self.owner:
+                last = i
+        new = [c for c in comments[last + 1:] if self._recent(c.get("created_at") or "1970-01-01T00:00:00Z")]
+        if not new or any("bot-off" in (c.get("body") or "") for c in new):
+            return
+        if bot_marked(comments, f"reply:{new[-1]['id']}"):
+            return
+        authors = list(dict.fromkeys(c["user"]["login"] for c in new))
+        said = "\n\n".join(f"{c['user']['login']}: {c.get('body') or ''}" for c in new)[-4000:]
+        hello = "Thanks, " + ", ".join(f"@{a}" for a in authors) + "!"
+        url = new[-1].get("html_url") or issue.get("html_url", "")
+        self.replies_left -= 1
+        if SENSITIVE.search(said):
+            body = (f"{hello} This touches on security or legal matters, so I've left it for {self.them} to answer "
+                    "personally. If it is a vulnerability, please use private reporting (see SECURITY.md).")
+            self._wait(repo, n, url, "Sensitive comment: answer personally")
+        else:
+            body, decision = self._comment_text(repo, issue, said, hello)
+            if decision:
+                self._wait(repo, n, url, decision)
+        self._write(f"{name}#{n}: reply to {', '.join(authors)}", self.gh.comment, name, n,
+                    marker(f"reply:{new[-1]['id']}") + body + FOOTER)
+
+    def _comment_text(self, repo: dict, issue: dict, said: str, hello: str) -> tuple[str, str]:
+        """The reply text and, when the owner needs to decide something, one line describing it."""
+        thread = f"{issue.get('title', '')}\n\n{issue.get('body') or ''}"
+        if self._ai_ok(self.settings(repo)):
+            try:
+                excerpts = knowledge.best_excerpts(f"{issue.get('title', '')}\n{said}", self._docs_for(repo))
+                r = self.llm.comment_reply(repo["full_name"], thread, said, excerpts)
+                closing = f" {self.They} will review it and decide." if r["needs_owner"] else ""
+                return f"{hello} {r['reply']}{closing}", (r["decision"] or "Review the new comment") if r["needs_owner"] else ""
+            except LLMQuotaExceeded:
+                raise
+            except (LLMError, ValueError) as exc:
+                self._error(repo, f"#{issue['number']} reply", exc)
+        if THANKS.search(said) and not QUESTION.search(said):
+            return f"{hello} Feedback like this really helps.", ""
+        return f"{hello} {self.They} will read this and reply.", "Review the new comment"
+
+    def _wait(self, repo: dict, n: int, url: str, what: str) -> None:
+        self.waiting.append({"repo": repo["full_name"], "n": n, "url": url, "what": what,
+                             "at": self.now.strftime("%Y-%m-%dT%H:%M:%SZ")})
+        self.report.flagged.append(f"{repo['full_name']}#{n}: {what}")
+
+    def waiting_issue(self) -> None:
+        """One open issue in the bot's own repository lists every decision waiting on the owner. An item leaves the
+        list when the owner replies on that thread, closes it, or ticks its box here."""
+        if self.ledger is None or not self.home:
+            return
+        home = f"{self.owner}/{self.cfg.get('home_repo', 'nexonic-sentinel')}"
+        items = [i for i in self.ledger.get("waiting", []) if isinstance(i, dict) and i.get("repo") and i.get("n")]
+        known = {(i["repo"], i["n"]) for i in items}
+        items += [i for i in self.waiting if (i["repo"], i["n"]) not in known]
+        found = self.gh.paged(f"/repos/{home}/issues", state="open", labels="waiting", limit=10)
+        current = next((i for i in found if WAIT_MARK in (i.get("body") or "")), None)
+        ticked = set(TICKED.findall(current.get("body") or "")) if current else set()
+        keep = []
+        for i in items:
+            if i["url"] in ticked:
+                continue
+            try:
+                issue = self.gh.get(f"/repos/{i['repo']}/issues/{i['n']}")
+                after = self.gh.paged(f"/repos/{i['repo']}/issues/{i['n']}/comments", since=i["at"], limit=100)
+            except GitHubError:
+                keep.append(i)
+                continue
+            if issue.get("state") != "open" or any((c.get("user") or {}).get("login") == self.owner for c in after):
+                continue  # the owner has answered or closed it
+            keep.append(i)
+        self.ledger.set("waiting", keep)
+        if not keep:
+            if current:
+                self._write(f"{home}#{current['number']}: nothing waiting, close the list", self.gh.request, "PATCH",
+                            f"/repos/{home}/issues/{current['number']}", json={"state": "closed"})
+            return
+        lines = [WAIT_MARK, "Decisions waiting on you. The bot only replied and changed nothing. Reply on the thread "
+                 "(or close it) when it's handled, or tick the box here, and it leaves this list.", ""]
+        lines += [f"- [ ] [{i['repo'].split('/', 1)[-1]}#{i['n']}]({i['url']}): {i['what']}" for i in keep]
+        body = "\n".join(lines)
+        if current is None:
+            self._write(f"{home}: create the Waiting on you list ({len(keep)})", self.gh.request, "POST",
+                        f"/repos/{home}/issues", json={"title": "Waiting on you", "body": body, "labels": ["waiting"]})
+        elif (current.get("body") or "").strip() != body.strip():
+            self._write(f"{home}#{current['number']}: update the Waiting on you list ({len(keep)})", self.gh.request,
+                        "PATCH", f"/repos/{home}/issues/{current['number']}", json={"body": body})
 
     # ------------------------------------------------------------------ pull requests
     def pulls(self, repo: dict) -> None:
