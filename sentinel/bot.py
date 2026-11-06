@@ -34,8 +34,11 @@ V = r"v?(\d+)(?:\.(\d+))?(?:\.(\d+))?"  # 1.2.3, 1.2 or just 4 (GitHub Actions)
 BUMP = re.compile(rf"from {V}\S* to {V}", re.I)
 
 DISCUSSIONS_Q = """query($owner:String!,$name:String!){repository(owner:$owner,name:$name){hasDiscussionsEnabled
- discussions(first:25,orderBy:{field:CREATED_AT,direction:DESC}){nodes{id number title body createdAt url isAnswered
- locked author{login __typename} category{name isAnswerable} comments(first:40){nodes{body author{login __typename}}}}}}}"""
+ discussions(first:25,orderBy:{field:UPDATED_AT,direction:DESC}){nodes{id number title body createdAt url isAnswered
+ locked author{login __typename} category{name isAnswerable}
+ comments(last:40){nodes{id url createdAt body author{login __typename}}}}}}}"""
+DISCUSSION_STATE_Q = """query($owner:String!,$name:String!,$n:Int!){repository(owner:$owner,name:$name){
+ discussion(number:$n){closed comments(last:50){nodes{createdAt author{login}}}}}}"""
 
 
 def marker(kind: str) -> str:
@@ -59,6 +62,11 @@ THANKS = re.compile(r"\b(thanks?|thank you|great|awesome|works?( now| fine| grea
 QUESTION = re.compile(r"\?|\b(how|why|when|where|can (i|you)|could you|is there)\b", re.I)
 WAIT_MARK = "<!-- nexonic-sentinel:waiting -->"
 TICKED = re.compile(r"^- \[[xX]\] \[[^\]]*\]\(([^)\s]+)\)", re.M)
+
+
+def _mentions(hello: str) -> str:
+    """"Thanks, @a, @b!" -> "@a @b" (the model writes the thank-you itself, in the poster's language)."""
+    return " ".join(re.findall(r"@[\w-]+", hello))
 
 
 def _issue_number(issue_url: str) -> int:
@@ -336,24 +344,32 @@ class Sentinel:
     def _comment_text(self, repo: dict, issue: dict, said: str, hello: str) -> tuple[str, str]:
         """The reply text and, when the owner needs to decide something, one line describing it."""
         thread = f"{issue.get('title', '')}\n\n{issue.get('body') or ''}"
-        if self._ai_ok(self.settings(repo)):
-            try:
-                excerpts = knowledge.best_excerpts(f"{issue.get('title', '')}\n{said}", self._docs_for(repo))
-                r = self.llm.comment_reply(repo["full_name"], thread, said, excerpts)
-                closing = f" {self.They} will review it and decide." if r["needs_owner"] else ""
-                return f"{hello} {r['reply']}{closing}", (r["decision"] or "Review the new comment") if r["needs_owner"] else ""
-            except LLMQuotaExceeded:
-                raise
-            except (LLMError, ValueError) as exc:
-                self._error(repo, f"#{issue['number']} reply", exc)
+        r = self._ai_reply(repo, thread, said, f"#{issue['number']} reply")
+        if r:
+            return f"{_mentions(hello)} {r['reply']}", (r["decision"] or "Review the new comment") if r["needs_owner"] else ""
         if THANKS.search(said) and not QUESTION.search(said):
             return f"{hello} Feedback like this really helps.", ""
         return f"{hello} {self.They} will read this and reply.", "Review the new comment"
 
-    def _wait(self, repo: dict, n: int, url: str, what: str) -> None:
-        self.waiting.append({"repo": repo["full_name"], "n": n, "url": url, "what": what,
-                             "at": self.now.strftime("%Y-%m-%dT%H:%M:%SZ")})
-        self.report.flagged.append(f"{repo['full_name']}#{n}: {what}")
+    def _ai_reply(self, repo: dict, thread: str, said: str, where: str) -> dict[str, Any] | None:
+        """A reply written by the model (in the poster's language), or None when AI is off, out of budget or fails."""
+        if not self._ai_ok(self.settings(repo)):
+            return None
+        try:
+            excerpts = knowledge.best_excerpts(f"{thread[:300]}\n{said}", self._docs_for(repo))
+            return self.llm.comment_reply(repo["full_name"], thread, said, excerpts)
+        except LLMQuotaExceeded:
+            raise
+        except (LLMError, ValueError, GitHubError) as exc:
+            self._error(repo, where, exc)
+            return None
+
+    def _wait(self, repo: dict, n: int, url: str, what: str, kind: str = "issue") -> None:
+        item = {"repo": repo["full_name"], "n": n, "url": url, "what": what, "at": self.now.strftime("%Y-%m-%dT%H:%M:%SZ")}
+        if kind == "discussion":
+            item["kind"] = "discussion"
+        self.waiting.append(item)
+        self.report.flagged.append(f"{repo['full_name']}{' discussion ' if kind == 'discussion' else ''}#{n}: {what}")
 
     def waiting_issue(self) -> None:
         """One open issue in the bot's own repository lists every decision waiting on the owner. An item leaves the
@@ -362,8 +378,8 @@ class Sentinel:
             return
         home = f"{self.owner}/{self.cfg.get('home_repo', 'nexonic-sentinel')}"
         items = [i for i in self.ledger.get("waiting", []) if isinstance(i, dict) and i.get("repo") and i.get("n")]
-        known = {(i["repo"], i["n"]) for i in items}
-        items += [i for i in self.waiting if (i["repo"], i["n"]) not in known]
+        known = {(i["repo"], i["n"], i.get("kind")) for i in items}
+        items += [i for i in self.waiting if (i["repo"], i["n"], i.get("kind")) not in known]
         found = self.gh.paged(f"/repos/{home}/issues", state="open", labels="waiting", limit=10)
         current = next((i for i in found if WAIT_MARK in (i.get("body") or "")), None)
         ticked = set(TICKED.findall(current.get("body") or "")) if current else set()
@@ -371,13 +387,7 @@ class Sentinel:
         for i in items:
             if i["url"] in ticked:
                 continue
-            try:
-                issue = self.gh.get(f"/repos/{i['repo']}/issues/{i['n']}")
-                after = self.gh.paged(f"/repos/{i['repo']}/issues/{i['n']}/comments", since=i["at"], limit=100)
-            except GitHubError:
-                keep.append(i)
-                continue
-            if issue.get("state") != "open" or any((c.get("user") or {}).get("login") == self.owner for c in after):
+            if not self._still_waiting(i):
                 continue  # the owner has answered or closed it
             keep.append(i)
         self.ledger.set("waiting", keep)
@@ -388,7 +398,8 @@ class Sentinel:
             return
         lines = [WAIT_MARK, "Decisions waiting on you. The bot only replied and changed nothing. Reply on the thread "
                  "(or close it) when it's handled, or tick the box here, and it leaves this list.", ""]
-        lines += [f"- [ ] [{i['repo'].split('/', 1)[-1]}#{i['n']}]({i['url']}): {i['what']}" for i in keep]
+        lines += [f"- [ ] [{i['repo'].split('/', 1)[-1]}{' discussion ' if i.get('kind') == 'discussion' else ''}"
+                  f"#{i['n']}]({i['url']}): {i['what']}" for i in keep]
         body = "\n".join(lines)
         if current is None:
             self._write(f"{home}: create the Waiting on you list ({len(keep)})", self.gh.request, "POST",
@@ -396,6 +407,21 @@ class Sentinel:
         elif (current.get("body") or "").strip() != body.strip():
             self._write(f"{home}#{current['number']}: update the Waiting on you list ({len(keep)})", self.gh.request,
                         "PATCH", f"/repos/{home}/issues/{current['number']}", json={"body": body})
+
+    def _still_waiting(self, i: dict[str, Any]) -> bool:
+        """False once the owner has replied after the item was listed, or the thread is closed."""
+        try:
+            if i.get("kind") == "discussion":
+                owner, short = i["repo"].split("/", 1)
+                d = self.gh.graphql(DISCUSSION_STATE_Q, owner=owner, name=short, n=int(i["n"]))["repository"]["discussion"]
+                closed = bool(d.get("closed"))
+                after = [c for c in d["comments"]["nodes"] if (c.get("createdAt") or "") > i["at"]]
+                return not closed and not any((c.get("author") or {}).get("login") == self.owner for c in after)
+            issue = self.gh.get(f"/repos/{i['repo']}/issues/{i['n']}")
+            after = self.gh.paged(f"/repos/{i['repo']}/issues/{i['n']}/comments", since=i["at"], limit=100)
+        except (GitHubError, KeyError, TypeError, ValueError):
+            return True  # could not check: keep it listed
+        return issue.get("state") == "open" and not any((c.get("user") or {}).get("login") == self.owner for c in after)
 
     # ------------------------------------------------------------------ pull requests
     def pulls(self, repo: dict) -> None:
@@ -578,32 +604,64 @@ class Sentinel:
         data = self.gh.graphql(DISCUSSIONS_Q, owner=owner, name=short)["repository"]
         if not data.get("hasDiscussionsEnabled"):
             return
+        follow_ups = bool(self.settings(repo).get("replies")) and not repo.get("private")
         for d in data["discussions"]["nodes"]:
             author = d.get("author") or {}
             owner_post = author.get("login") == self.owner and TEST_TAG not in f"{d['title']} {d.get('body') or ''}".lower()
-            if (d["locked"] or d["isAnswered"] or not self._recent(d["createdAt"]) or is_bot(author)
-                    or owner_post or "bot-off" in (d.get("body") or "")):
+            category = (d.get("category") or {}).get("name", "").lower()
+            if d["locked"] or "bot-off" in (d.get("body") or "") or category.startswith(("announcement", "poll")):
                 continue
-            if bot_marked(d["comments"]["nodes"], "discussion", author_key="author"):
+            comments = d["comments"]["nodes"]
+            handled = bot_marked(comments, "discussion", author_key="author") or any(
+                (c.get("author") or {}).get("login") == self.owner for c in comments)
+            if not handled:
+                if d["isAnswered"] or not self._recent(d["createdAt"]) or is_bot(author) or owner_post:
+                    continue
+                body = self._discussion_reply(repo, d)
+                if body:
+                    self._write(f"{name} discussion #{d['number']}: reply", self.gh.discussion_comment, d["id"], body)
                 continue
-            if any((c.get("author") or {}).get("login") == self.owner for c in d["comments"]["nodes"]):
-                continue  # the owner is already handling it
-            body = self._discussion_reply(repo, d)
-            if body:
-                self._write(f"{name} discussion #{d['number']}: reply", self.gh.discussion_comment, d["id"], body)
+            if follow_ups:
+                self._discussion_follow_up(repo, d, comments)
+
+    def _discussion_follow_up(self, repo: dict, d: dict, comments: list[dict]) -> None:
+        """New comments by other people after the last word from the owner or the bot get one reply."""
+        last = -1
+        for i, c in enumerate(comments):
+            if is_bot(c.get("author")) or (c.get("author") or {}).get("login") == self.owner:
+                last = i
+        new = [c for c in comments[last + 1:] if c.get("id") and (c.get("author") or {}).get("login")
+               and self._recent(c.get("createdAt") or "1970-01-01T00:00:00Z")]
+        if not new or any("bot-off" in (c.get("body") or "") for c in new) or self.replies_left <= 0:
+            return
+        if bot_marked(comments, f"reply:{new[-1]['id']}", author_key="author"):
+            return
+        self.replies_left -= 1
+        authors = list(dict.fromkeys(c["author"]["login"] for c in new))
+        said = "\n\n".join(f"{c['author']['login']}: {c.get('body') or ''}" for c in new)[-4000:]
+        hello = "Thanks, " + ", ".join(f"@{a}" for a in authors) + "!"
+        url = new[-1].get("url") or d.get("url", "")
+        if SENSITIVE.search(said):
+            body = (f"{hello} This touches on security or legal matters, so I've left it for {self.them} to answer "
+                    "personally.")
+            self._wait(repo, d["number"], url, "Sensitive comment: answer personally", "discussion")
+        else:
+            body, decision = self._comment_text(repo, {"number": d["number"], "title": d["title"],
+                                                       "body": d.get("body")}, said, hello)
+            if decision:
+                self._wait(repo, d["number"], url, decision, "discussion")
+        self._write(f"{repo['full_name']} discussion #{d['number']}: reply to {', '.join(authors)}",
+                    self.gh.discussion_comment, d["id"], marker(f"reply:{new[-1]['id']}") + body + FOOTER)
 
     def _discussion_reply(self, repo: dict, d: dict) -> str | None:
         question = f"{d['title']}\n\n{d.get('body') or ''}"
         who = d["author"]["login"]
-        if not d["category"].get("isAnswerable"):
-            if d["category"]["name"].lower().startswith("idea"):
-                return (f"{marker('discussion')}Thanks for the idea, @{who}! {self.They} reads every suggestion; "
-                        "a 👍 from others helps show how many people want it." + FOOTER)
-            return None
         if SENSITIVE.search(question):
             self.report.flagged.append(f"{repo['full_name']} discussion #{d['number']} (sensitive topic)")
             return (f"{marker('discussion')}Thanks, @{who}. This touches on security or legal matters, so I've left it "
                     f"for {self.them} to answer personally." + FOOTER)
+        if not d["category"].get("isAnswerable"):
+            return self._open_discussion_reply(repo, d, question, who)
         excerpts = knowledge.best_excerpts(question, self._docs_for(repo))
         if excerpts and self._ai_ok(self.settings(repo)):
             try:
@@ -617,9 +675,28 @@ class Sentinel:
                 return (f"{marker('discussion')}Hi @{who}, here's what the project's documentation says:\n\n"
                         f"{reply['answer']}\n\n**Sources**\n{self._doc_links(repo, reply['sources'])}\n\n"
                         f"If this solves it, please mark it as the answer. {self.They} will double-check." + FOOTER)
-        self.report.flagged.append(f"{repo['full_name']} discussion #{d['number']} (needs an answer)")
+        r = self._ai_reply(repo, question, question, f"discussion #{d['number']}")
+        if r:  # a helpful reply in the poster's language that says the maintainer will answer
+            self._wait(repo, d["number"], d.get("url", ""), r["decision"] or "Answer this question", "discussion")
+            return f"{marker('discussion')}@{who} {r['reply']}" + FOOTER
+        self._wait(repo, d["number"], d.get("url", ""), "Answer this question", "discussion")
         return (f"{marker('discussion')}Thanks for asking, @{who}! I couldn't find a clear answer in the docs, so I've "
                 f"flagged this for {self.them}." + FOOTER)
+
+    def _open_discussion_reply(self, repo: dict, d: dict, question: str, who: str) -> str:
+        """General, Ideas, Show and tell and other open categories: welcome, help from the docs, and a decision for
+        the owner when one is needed. Written in the poster's language when AI is on."""
+        r = self._ai_reply(repo, question, question, f"discussion #{d['number']}")
+        if r:
+            if r["needs_owner"]:
+                self._wait(repo, d["number"], d.get("url", ""), r["decision"] or "Reply to this post", "discussion")
+            return f"{marker('discussion')}@{who} {r['reply']}" + FOOTER
+        if (d.get("category") or {}).get("name", "").lower().startswith("idea"):
+            self._wait(repo, d["number"], d.get("url", ""), "New idea to consider", "discussion")
+            return (f"{marker('discussion')}Thanks for the idea, @{who}! {self.They} reads every suggestion; "
+                    "a 👍 from others helps show how many people want it." + FOOTER)
+        self._wait(repo, d["number"], d.get("url", ""), "Reply to this post", "discussion")
+        return (f"{marker('discussion')}Thanks for posting, @{who}! {self.They} will read this and reply." + FOOTER)
 
     # ------------------------------------------------------------------ weekly code health scan
     def code_scan(self, repo: dict) -> None:
