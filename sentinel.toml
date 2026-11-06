@@ -40,6 +40,15 @@ code_scan = true   # weekly code health report (a different set of files each we
 # goes on one "Waiting on you" issue in this repository until you reply on the thread, close it, or tick its box.
 max_per_run = 10
 
+[proposals]
+# The bot thinks requests and problems through like a maintainer: it either asks what is missing, or prepares a small
+# concrete change (translations, docs, wording, an obvious small bug) as a pull request labelled `needs-approval`.
+# It never merges a proposal: merging is your approval, closing declines, and it tells the person who asked.
+# Never touches CI/workflows, licences, security policy, lock/version files or credentials. Owner's repos only.
+enabled = true
+max_per_run = 2   # each proposal uses up to 2 AI calls
+max_lines = 60    # larger changes are left to you
+
 [review]
 min_severity = "medium"   # high | medium | low
 max_files = 30            # larger pull requests are skipped
