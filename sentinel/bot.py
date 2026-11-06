@@ -193,6 +193,9 @@ class Sentinel:
             self.report.act("Disabled in sentinel.toml; nothing done.")
             return self.report
         skip = set(self.cfg.get("skip_repos", [])) if self.home else set()
+        # People first: replies to issues, discussions and comments run across all repositories before pull request
+        # reviews and code scans, so those cannot use up the run's AI budget before anyone gets an answer.
+        phases: list[list[tuple[Callable, dict]]] = [[], [], []]
         for repo in self.gh.repos():
             if repo["name"] in skip:
                 continue
@@ -203,23 +206,24 @@ class Sentinel:
                 continue
             if not s["enabled"]:
                 continue
-            steps: list[Callable] = []
             if s["triage"]:
-                steps.append(self.issues)
-            steps.append(self.pulls)
+                phases[0].append((self.issues, repo))
             if s["discussions"]:
-                steps.append(self.discussions)
+                phases[0].append((self.discussions, repo))
             if s.get("replies"):
-                steps.append(self.comments)
+                phases[0].append((self.comments, repo))
+            phases[1].append((self.pulls, repo))
             if s["ai"] and s["code_scan"]:
-                steps.append(self.code_scan)
-            for step in steps:
-                try:
-                    step(repo)
-                except LLMQuotaExceeded:
-                    self.report.flagged.append("Automated reviews paused until the next run (daily limit reached)")
-                except (GitHubError, LLMError) as exc:
-                    self._error(repo, step.__name__, exc)
+                phases[2].append((self.code_scan, repo))
+        for step, repo in [x for phase in phases for x in phase]:
+            try:
+                step(repo)
+            except LLMQuotaExceeded:
+                note = "Automated reviews paused until the next run (daily limit reached)"
+                if note not in self.report.flagged:
+                    self.report.flagged.append(note)
+            except (GitHubError, LLMError) as exc:
+                self._error(repo, step.__name__, exc)
         return self.report
 
     # ------------------------------------------------------------------ issues
