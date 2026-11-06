@@ -157,7 +157,6 @@ class Autopilot:
                         self.bot.report.flagged.append(note)
                 except (GitHubError, httpx.HTTPError, ValueError, KeyError) as exc:
                     self.bot._error(repo, f"autopilot {name}", exc)
-            self.merge_ready(repo)
         if self.on("seo"):
             try:
                 self.seo(repos)
@@ -227,12 +226,10 @@ class Autopilot:
         except GitHubError:
             pass
         diff = contrib.unified({path: before}, {path: after}).replace("```", "ˋˋˋ")
-        small = changed <= int(self.part("fixer").get("automerge_max_lines", 6))
+        # Every fix waits for the owner: merging is the approval, closing declines. The bot never merges its own fixes.
         body = (f"{self.bot_marker('autofix')}**{title}** in `{path}`\n\n{why}\n\n```diff\n{diff}\n```\n\n"
-                + ("This is a small change, so I will merge it once every check passes, unless you add the "
-                   "`hold` label or close this PR." if small else
-                   "This change is larger than the automatic-merge limit, so it waits for your review.")
-                + "\n\n<sub>Found by a weekly automated read of the code. Please check it before relying on it.</sub>")
+                "**Your decision:** merge this pull request to approve the fix, or close it to decline. "
+                "Please check it before merging.")
 
         def do() -> None:
             head = gh.get(f"/repos/{name}/git/ref/heads/{base}")["object"]["sha"]
@@ -243,7 +240,7 @@ class Autopilot:
                              "content": base64.b64encode(after.encode("utf-8")).decode("ascii")})
             pr = gh.request("POST", f"/repos/{name}/pulls",
                             json={"title": f"Fix: {title}", "head": branch, "base": base, "body": body})
-            gh.add_labels(name, pr["number"], [FIX_LABEL] + (["automerge"] if small else []))
+            gh.add_labels(name, pr["number"], [FIX_LABEL, "needs-approval"])
 
         self.bot._write(f"{name}: open fix PR for {path} ({changed} changed lines)", do)
         return True
@@ -268,7 +265,7 @@ class Autopilot:
             body = (f"{self.bot_marker('repo-health')}This repository is missing a few community files that help "
                     f"people report bugs and contribute. This pull request adds:\n\n{listing}\n\nThey are generic "
                     "starting points: edit them as you like before merging, or close this pull request to skip it. "
-                    "It won't be proposed again.\n\n<sub>Proposed once by Nexonic Sentinel's weekly repository check.</sub>")
+                    "It won't be proposed again.")
 
             def do() -> None:
                 head = gh.get(f"/repos/{name}/git/ref/heads/{base}")["object"]["sha"]
@@ -288,23 +285,6 @@ class Autopilot:
 
     def bot_marker(self, kind: str) -> str:
         return f"<!-- nexonic-sentinel:{kind} -->\n"
-
-    def merge_ready(self, repo: dict) -> None:
-        """Squash-merge the bot's own small fix PRs once every check passed; anything else waits for the owner."""
-        name = repo["full_name"]
-        for pr in self.bot.gh.paged(f"/repos/{name}/pulls", state="open", limit=50):
-            labels = {lb.get("name") for lb in pr.get("labels", [])}
-            if not {FIX_LABEL, "automerge"} <= labels or "hold" in labels:
-                continue
-            if not pr["head"]["ref"].startswith("sentinel/fix-") or "nexonic-sentinel:autofix" not in (pr.get("body") or ""):
-                continue
-            sha = pr["head"]["sha"]
-            runs = self.bot._check_runs(name, sha)
-            if not runs or not self.bot._checks_green(name, sha):
-                continue  # a repository without CI never gets automatic merges
-            self.bot._write(f"{name}#{pr['number']}: merge small fix (checks passed)", self.bot.gh.request, "PUT",
-                            f"/repos/{name}/pulls/{pr['number']}/merge",
-                            json={"merge_method": "squash", "sha": sha})
 
     # ------------------------------------------------------------------ 2. SEO
     def seo(self, repos: list[dict]) -> None:

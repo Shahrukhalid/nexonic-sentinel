@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
-from . import contrib, growth, insights, iptv, knowledge, review
+from . import contrib, growth, insights, iptv, knowledge, proposals, review
 from . import settings as repo_settings
 from .github import GitHub, GitHubError
 from .ledger import Ledger
@@ -17,8 +17,7 @@ from .llm import LLMError, LLMQuotaExceeded, OpenRouter, json_from
 
 log = logging.getLogger("sentinel")
 
-FOOTER = ("\n\n<sub>I'm Nexonic Sentinel, an automated assistant. Add the `bot-off` label "
-          "(or write `bot-off` in the post) to stop me on this thread.</sub>")
+FOOTER = ""  # GitHub already marks the bot's posts as a bot: no signature note (owner's choice)
 SENSITIVE = re.compile(r"\b(security|vulnerab\w*|exploit|cve-\d|leak\w*|password|token|secret key|lawsuit|legal|"
                        r"licen[cs]e violation|dmca|copyright claim)\b", re.I)
 LABEL_RULES = {
@@ -147,6 +146,9 @@ class Sentinel:
         self._settings: dict[str, dict[str, Any]] = {}
         self.waiting: list[dict[str, Any]] = []  # decisions for the owner, listed in the "Waiting on you" issue
         self.replies_left = int(_table_get(cfg, "replies", "max_per_run", 10))
+        self.proposals_left = int(_table_get(cfg, "proposals", "max_per_run", 2)) if home else 0
+        self.proposal_lines = int(_table_get(cfg, "proposals", "max_lines", 60))
+        self.proposals_on = bool(_table_get(cfg, "proposals", "enabled", True)) and home
 
     # ------------------------------------------------------------------ helpers
     def _write(self, description: str, fn: Callable, *args, **kwargs) -> Any:
@@ -222,7 +224,12 @@ class Sentinel:
                 note = "Automated reviews paused until the next run (daily limit reached)"
                 if note not in self.report.flagged:
                     self.report.flagged.append(note)
-            except (GitHubError, LLMError) as exc:
+            except LLMError as exc:  # the free models had a bad moment: not the repository's fault, retried next run
+                note = "Some AI answers skipped this run (the free models did not reply); retried next run"
+                if note not in self.report.flagged:
+                    self.report.flagged.append(note)
+                log.info("%s %s: %s", repo["full_name"] if self.home else "repo", step.__name__, exc)
+            except GitHubError as exc:
                 self._error(repo, step.__name__, exc)
         return self.report
 
@@ -253,6 +260,18 @@ class Sentinel:
                 self._write(f"{name}#{issue['number']}: label {', '.join(wanted)}",
                             self.gh.add_labels, name, issue["number"], wanted)
             body = self._triage_text(repo, issue, text, wanted)
+            r = None if SENSITIVE.search(text) else self._ai_reply(repo, text, text, f"#{issue['number']} triage")
+            if r:  # a maintainer-style first reply in the reporter's language: diagnosis, workaround, next step
+                body = f"{marker('triage')}@{issue['user']['login']} {r['reply']}" + FOOTER
+                if r["needs_owner"]:
+                    self._wait(repo, issue["number"], issue.get("html_url", ""), r["decision"] or "Review this new issue")
+            if not SENSITIVE.search(text) and not repo.get("private"):
+                extra, decision = self._propose(repo, issue, text, issue.get("user"), issue.get("html_url", ""),
+                                                "Review this new issue")
+                if extra:
+                    body = body.replace(FOOTER, "") + extra + FOOTER
+                    if decision:
+                        self._wait(repo, issue["number"], issue.get("html_url", ""), decision)
             self._write(f"{name}#{issue['number']}: triage comment", self.gh.comment, name, issue["number"], body)
 
     def _tpl(self, repo: dict, key: str, default: str, **values: Any) -> str:
@@ -341,6 +360,9 @@ class Sentinel:
         else:
             body, decision = self._comment_text(repo, issue, said, hello)
             if decision:
+                extra, decision = self._propose(repo, issue, said, new[-1].get("user"), url, decision)
+                body += extra
+            if decision:
                 self._wait(repo, n, url, decision)
         self._write(f"{name}#{n}: reply to {', '.join(authors)}", self.gh.comment, name, n,
                     marker(f"reply:{new[-1]['id']}") + body + FOOTER)
@@ -368,6 +390,64 @@ class Sentinel:
             self._error(repo, where, exc)
             return None
 
+    def _propose(self, repo: dict, issue: dict, said: str, who: dict | None, url: str, decision: str) -> tuple[str, str]:
+        """Think it through like a maintainer: prepare the change as a pull request for the owner to approve, or ask
+        what is missing. Returns (text to add to the reply, decision for the owner's list, "" when none is needed)."""
+        if not self.proposals_on or self.proposals_left <= 0 or repo.get("private") or not self._ai_ok(self.settings(repo)):
+            return "", decision
+        name, n = repo["full_name"], int(issue["number"])
+        done = self.ledger.get("proposals", []) if self.ledger else []
+        if any(i.get("repo") == name and int(i.get("thread", 0)) == n for i in done):
+            return "", decision  # one open proposal per thread
+        self.proposals_left -= 1
+        thread = f"{issue.get('title', '')}\n\n{issue.get('body') or ''}"
+        try:
+            entries = self.gh.tree_entries(name, repo.get("default_branch", "main"))
+            files = proposals.candidate_files(entries, f"{thread}\n{said}")
+            p = proposals.plan(self.llm, repo, thread, said, files)
+            if p["action"] == "ask" and p["questions"]:
+                return ("\n\nTo move this forward, could you tell me:\n" + "\n".join(f"- {q}" for q in p["questions"]),
+                        "")  # nothing for the owner until they answer
+            if p["action"] != "change" or not p["files"]:
+                return "", decision
+            sources = {f: t for f in p["files"] if (t := self.gh.raw_file(name, f))}
+            change = proposals.draft(self.llm, repo, said, p["summary"] or decision, sources, self.proposal_lines) \
+                if sources else None
+            if not change:
+                return "", decision
+            if self.dry:
+                self.report.act(f"[dry run] {name}#{n}: would propose \"{change['title']}\" ({change['lines']} lines)")
+                return "", decision
+            pr = proposals.open_pr(self.gh, repo, n, url, who, change, sources, marker("proposal"))
+        except LLMQuotaExceeded:
+            raise
+        except (LLMError, GitHubError, ValueError, KeyError, TypeError) as exc:
+            self._error(repo, f"#{n} proposal", exc)
+            return "", decision
+        self.report.act(f"{name}#{n}: proposed #{pr['number']} \"{change['title']}\" ({change['lines']} lines)")
+        if self.ledger is not None:
+            self.ledger.set("proposals", [*done, {"repo": name, "thread": n, "pr": pr["number"],
+                                                  "who": (who or {}).get("login", "")}])
+        pr_url = pr.get("html_url") or f"https://github.com/{name}/pull/{pr['number']}"
+        self.waiting.append({"repo": name, "n": int(pr["number"]), "url": pr_url, "kind": "pr",
+                             "what": f"Approve (merge) or decline (close): {change['title']}",
+                             "at": self.now.strftime("%Y-%m-%dT%H:%M:%SZ")})
+        self.report.flagged.append(f"{name} PR #{pr['number']}: approve or decline the proposal")
+        return (f"\n\nI've prepared this as a change for the maintainer to approve: #{pr['number']}. "
+                "Nothing changes until it's approved.", "")
+
+    def proposal_follow_ups(self) -> None:
+        """Once the owner merges or closes a proposal, tell the person who asked (home installation only)."""
+        if self.ledger is None or not self.home:
+            return
+        left = []
+        for item in self.ledger.get("proposals", []):
+            if not (isinstance(item, dict) and item.get("repo") and item.get("pr") and item.get("thread")):
+                continue
+            if not proposals.follow_up(self, item):
+                left.append(item)
+        self.ledger.set("proposals", left)
+
     def _wait(self, repo: dict, n: int, url: str, what: str, kind: str = "issue") -> None:
         item = {"repo": repo["full_name"], "n": n, "url": url, "what": what, "at": self.now.strftime("%Y-%m-%dT%H:%M:%SZ")}
         if kind == "discussion":
@@ -380,6 +460,7 @@ class Sentinel:
         list when the owner replies on that thread, closes it, or ticks its box here."""
         if self.ledger is None or not self.home:
             return
+        self.proposal_follow_ups()
         home = f"{self.owner}/{self.cfg.get('home_repo', 'nexonic-sentinel')}"
         items = [i for i in self.ledger.get("waiting", []) if isinstance(i, dict) and i.get("repo") and i.get("n")]
         known = {(i["repo"], i["n"], i.get("kind")) for i in items}
@@ -402,7 +483,8 @@ class Sentinel:
             return
         lines = [WAIT_MARK, "Decisions waiting on you. The bot only replied and changed nothing. Reply on the thread "
                  "(or close it) when it's handled, or tick the box here, and it leaves this list.", ""]
-        lines += [f"- [ ] [{i['repo'].split('/', 1)[-1]}{' discussion ' if i.get('kind') == 'discussion' else ''}"
+        kinds = {"discussion": " discussion ", "pr": " PR "}
+        lines += [f"- [ ] [{i['repo'].split('/', 1)[-1]}{kinds.get(i.get('kind', ''), '')}"
                   f"#{i['n']}]({i['url']}): {i['what']}" for i in keep]
         body = "\n".join(lines)
         if current is None:
@@ -415,6 +497,8 @@ class Sentinel:
     def _still_waiting(self, i: dict[str, Any]) -> bool:
         """False once the owner has replied after the item was listed, or the thread is closed."""
         try:
+            if i.get("kind") == "pr":
+                return self.gh.get(f"/repos/{i['repo']}/pulls/{i['n']}").get("state") == "open"
             if i.get("kind") == "discussion":
                 owner, short = i["repo"].split("/", 1)
                 d = self.gh.graphql(DISCUSSION_STATE_Q, owner=owner, name=short, n=int(i["n"]))["repository"]["discussion"]

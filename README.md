@@ -17,6 +17,7 @@
 |---|---|---|
 | New issues | Adds matching labels (`bug`, `enhancement`, `question`, `documentation`) when they exist, thanks the author, asks for reproduction details on short bug reports and links the docs that look relevant. Possible security reports are pointed to private vulnerability reporting. | no |
 | Comments on issues | Replies once to new comments from other people on open issues: thanks, answers from your docs, or "the maintainer will decide". It never changes, labels, closes or merges anything because of a comment; each decision goes on one **Waiting on you** issue in the bot's repository and leaves it when you reply on the thread, close it, or tick its box. Off by default for other accounts (`replies = true`). | AI replies only |
+| Proposals | Thinks requests and problems through like a maintainer: asks the questions that are missing, or prepares a small, concrete change (translations, docs, wording, an obvious small bug) as a pull request labelled `needs-approval`, crediting the person who asked. It only keeps changes that apply cleanly and stay valid, never touches CI, licences, security policy, lock or version files, and **never merges**: merging is your approval, closing declines, and it tells the person who asked. Owner's repositories only (`[proposals]` in sentinel.toml). | yes |
 | Pull requests | Welcomes first-time contributors. **Bug review:** on every new commit it reads the changed lines and posts the concrete bugs it finds (file, line, why, suggested fix), plus any failing checks. It only comments: it never approves, blocks or pushes code. | review only |
 | Weekly code health | Reads a different few source files each week and opens one "Code health report" issue when it finds likely bugs. Findings already reported are never repeated. | yes |
 | Discussions | Q&A questions are answered from your README and `docs/` only, with sources. Posts in every other category (General, Ideas, Show and tell…) get a welcome and help from the docs, in the poster's own language, and later comments get one reply each (`replies = true`). Announcements and polls are left alone. Anything that needs your decision goes on the **Waiting on you** list. | AI answers only |
@@ -88,8 +89,8 @@ Backlinks and Discussions are off unless their `enabled = true` is set. The top-
 On the owner's own public repositories, once a week each:
 
 - **Fixer:** reads a couple of source files, and when it finds a clear bug with a fix that applies cleanly (and still
-  parses, for Python), opens a pull request labelled `autofix`. Fixes of a few lines are squash-merged once every
-  check passes; add the `hold` label to stop that. Repositories without CI are never merged automatically.
+  parses, for Python), opens a pull request labelled `autofix` and `needs-approval`. It is never merged automatically: merge it to
+  approve, close it to decline.
 - **SEO:** one "SEO report" issue with a 0-100 score per repository (description, topics, website link, README
   structure, licence, contributing guide). Descriptions and topics are applied directly when the app has the
   Administration permission, otherwise suggested.

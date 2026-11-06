@@ -40,6 +40,15 @@ code_scan = true   # weekly code health report (a different set of files each we
 # goes on one "Waiting on you" issue in this repository until you reply on the thread, close it, or tick its box.
 max_per_run = 10
 
+[proposals]
+# The bot thinks requests and problems through like a maintainer: it either asks what is missing, or prepares a small
+# concrete change (translations, docs, wording, an obvious small bug) as a pull request labelled `needs-approval`.
+# It never merges a proposal: merging is your approval, closing declines, and it tells the person who asked.
+# Never touches CI/workflows, licences, security policy, lock/version files or credentials. Owner's repos only.
+enabled = true
+max_per_run = 2   # each proposal uses up to 2 AI calls
+max_lines = 60    # larger changes are left to you
+
 [review]
 min_severity = "medium"   # high | medium | low
 max_files = 30            # larger pull requests are skipped
@@ -121,12 +130,11 @@ enabled = true
 
 [autopilot.fixer]
 # Reads a few source files a week and opens a pull request (label `autofix`) for a confident fix that applies cleanly.
-# Fixes of at most automerge_max_lines changed lines get the `automerge` label and are squash-merged once every
-# check passes; add the `hold` label to stop that. Repositories without CI checks are never merged automatically.
+# Every fix waits for you (label `needs-approval`): merge it to approve, close it to decline. Nothing is merged
+# automatically.
 enabled = true
 files_per_week = 2
 max_open = 2
-automerge_max_lines = 6
 max_file_bytes = 15000
 
 [autopilot.seo]
