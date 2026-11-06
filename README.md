@@ -89,8 +89,8 @@ Backlinks and Discussions are off unless their `enabled = true` is set. The top-
 On the owner's own public repositories, once a week each:
 
 - **Fixer:** reads a couple of source files, and when it finds a clear bug with a fix that applies cleanly (and still
-  parses, for Python), opens a pull request labelled `autofix`. Fixes of a few lines are squash-merged once every
-  check passes; add the `hold` label to stop that. Repositories without CI are never merged automatically.
+  parses, for Python), opens a pull request labelled `autofix` and `needs-approval`. It is never merged automatically: merge it to
+  approve, close it to decline.
 - **SEO:** one "SEO report" issue with a 0-100 score per repository (description, topics, website link, README
   structure, licence, contributing guide). Descriptions and topics are applied directly when the app has the
   Administration permission, otherwise suggested.

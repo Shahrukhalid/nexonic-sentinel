@@ -130,12 +130,11 @@ enabled = true
 
 [autopilot.fixer]
 # Reads a few source files a week and opens a pull request (label `autofix`) for a confident fix that applies cleanly.
-# Fixes of at most automerge_max_lines changed lines get the `automerge` label and are squash-merged once every
-# check passes; add the `hold` label to stop that. Repositories without CI checks are never merged automatically.
+# Every fix waits for you (label `needs-approval`): merge it to approve, close it to decline. Nothing is merged
+# automatically.
 enabled = true
 files_per_week = 2
 max_open = 2
-automerge_max_lines = 6
 max_file_bytes = 15000
 
 [autopilot.seo]

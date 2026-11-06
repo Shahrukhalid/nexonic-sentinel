@@ -17,8 +17,7 @@ from .llm import LLMError, LLMQuotaExceeded, OpenRouter, json_from
 
 log = logging.getLogger("sentinel")
 
-FOOTER = ("\n\n<sub>I'm Nexonic Sentinel, an automated assistant. Add the `bot-off` label "
-          "(or write `bot-off` in the post) to stop me on this thread.</sub>")
+FOOTER = ""  # GitHub already marks the bot's posts as a bot: no signature note (owner's choice)
 SENSITIVE = re.compile(r"\b(security|vulnerab\w*|exploit|cve-\d|leak\w*|password|token|secret key|lawsuit|legal|"
                        r"licen[cs]e violation|dmca|copyright claim)\b", re.I)
 LABEL_RULES = {

@@ -86,7 +86,7 @@ def test_fixer_opens_a_small_pr_with_a_clean_patch_and_runs_once_a_week():
     assert base64.b64decode(put[2]["content"]).decode() == SRC.replace("t = i", "t += i")
     pr = [w for w in gh.writes if w[1] == "/repos/owner/app/pulls"][0][2]
     assert pr["title"].startswith("Fix:") and "+        t += i" in pr["body"] and pr["head"].startswith("sentinel/fix-")
-    assert ("LABEL", "owner/app#7", {"labels": ["autofix", "automerge"]}) in gh.writes
+    assert ("LABEL", "owner/app#7", {"labels": ["autofix", "needs-approval"]}) in gh.writes
     gh.writes.clear()
     ap.fixer(gh.repo)
     assert gh.writes == []
@@ -103,21 +103,9 @@ def test_fixer_skips_unconfident_or_non_matching_edits():
     assert gh.writes == []
 
 
-def test_merge_only_own_labelled_prs_with_green_checks():
-    gh = FakeGH()
-    bot, ap = make(gh, fake_llm(FIX))
-    pr = {"number": 3, "labels": [{"name": "autofix"}, {"name": "automerge"}], "head": {"ref": "sentinel/fix-ab",
-          "sha": "s1"}, "body": "<!-- nexonic-sentinel:autofix -->"}
-    gh.pulls = [pr, {**pr, "number": 4, "labels": [*pr["labels"], {"name": "hold"}]},
-                {**pr, "number": 5, "head": {"ref": "feature", "sha": "s2"}}]
-    bot._check_runs = lambda repo, sha: [{"status": "completed", "conclusion": "success"}]
-    bot._checks_green = lambda repo, sha: True
-    ap.merge_ready(gh.repo)
-    assert [w[1] for w in gh.writes] == ["/repos/owner/app/pulls/3/merge"]
-    gh.writes.clear()
-    bot._check_runs = lambda repo, sha: []  # no CI: never merged
-    ap.merge_ready(gh.repo)
-    assert gh.writes == []
+def test_fixer_never_merges():
+    from sentinel.autopilot import Autopilot
+    assert not hasattr(Autopilot, "merge_ready")
 
 
 def test_seo_report_applies_or_suggests():

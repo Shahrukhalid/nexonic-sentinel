@@ -144,8 +144,7 @@ def open_pr(gh, repo: dict, thread: int, thread_url: str, who: dict | None, chan
     diff = contrib.unified(sources, change["after"]).replace("```", "ˋˋˋ")
     body = (f"{marker}Proposed for {thread_url}\n\n{change['why']}\n\n```diff\n{diff}\n```\n\n"
             "**Your decision:** merge this pull request to approve it, or close it to decline. "
-            "I never merge proposals myself; I'll let the person who asked know either way.\n\n"
-            "<sub>Prepared by Nexonic Sentinel from the conversation. Please check it before merging.</sub>")
+            "I never merge proposals myself; I'll let the person who asked know either way.")
     pr = gh.request("POST", f"/repos/{name}/pulls",
                     json={"title": change["title"], "head": branch, "base": base, "body": body})
     gh.add_labels(name, pr["number"], [LABEL])

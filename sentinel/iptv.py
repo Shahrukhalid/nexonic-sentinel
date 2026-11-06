@@ -42,7 +42,7 @@ REPORT_LABEL = "stream-report"
 MARK_REVIEW = "<!-- nexonic-sentinel:iptv-review -->"
 MARK_BROKEN = "<!-- nexonic-sentinel:iptv-broken -->"
 SUGGEST_METHOD = "community-suggestion"
-FOOTER = "\n\n<sub>Nexonic Sentinel</sub>"
+FOOTER = ""  # no signature note (owner's choice)
 
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$")
 REPO_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*$")
