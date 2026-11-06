@@ -225,7 +225,12 @@ class Sentinel:
                 note = "Automated reviews paused until the next run (daily limit reached)"
                 if note not in self.report.flagged:
                     self.report.flagged.append(note)
-            except (GitHubError, LLMError) as exc:
+            except LLMError as exc:  # the free models had a bad moment: not the repository's fault, retried next run
+                note = "Some AI answers skipped this run (the free models did not reply); retried next run"
+                if note not in self.report.flagged:
+                    self.report.flagged.append(note)
+                log.info("%s %s: %s", repo["full_name"] if self.home else "repo", step.__name__, exc)
+            except GitHubError as exc:
                 self._error(repo, step.__name__, exc)
         return self.report
 

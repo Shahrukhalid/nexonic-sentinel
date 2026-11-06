@@ -170,6 +170,7 @@ class OpenRouter:
                     self.models.remove(model)
                     self.models.insert(0, model)
                 return content
+            self.limited.add(model)  # a model that answers with nothing is skipped for the rest of the run
             last = f"{model}: empty reply"
         if self.models and all(m in self.limited for m in self.models):
             self.exhausted = True
