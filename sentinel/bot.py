@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
-from . import contrib, growth, insights, iptv, knowledge, proposals, review
+from . import contrib, growth, insights, iptv, knowledge, outside, proposals, review
 from . import settings as repo_settings
 from .github import GitHub, GitHubError
 from .ledger import Ledger
@@ -455,12 +455,41 @@ class Sentinel:
         self.waiting.append(item)
         self.report.flagged.append(f"{repo['full_name']}{' discussion ' if kind == 'discussion' else ''}#{n}: {what}")
 
+    def outside_prs(self) -> list[dict[str, Any]]:
+        """The owner's open PRs in other projects (read only). Those that need the owner go on the waiting list with
+        what to do; the rest are shown as status. Changes of state are reported once."""
+        if not self.cfg.get("outside_prs", {}).get("enabled", True):
+            return []
+        try:
+            found = outside.find(self.gh, self.owner)
+        except GitHubError as exc:
+            log.info("outside PRs: %s", exc)
+            return []
+        rows = []
+        before = {r.get("url"): r.get("who") for r in self.ledger.get("outside", [])} if self.ledger is not None else {}
+        for item in found:
+            try:
+                row = outside.check(self.gh, item, self.owner)
+            except (GitHubError, KeyError, TypeError, ValueError) as exc:
+                log.info("outside PR %s: %s", item.get("html_url"), exc)
+                continue
+            rows.append(row)
+            if row["who"] == "you":
+                self.waiting.append({"repo": row["repo"], "n": row["n"], "url": row["url"], "kind": "outside",
+                                     "what": row["what"], "at": self.now.strftime("%Y-%m-%dT%H:%M:%SZ")})
+            if before.get(row["url"]) != row["who"]:
+                self.report.flagged.append(f"{row['repo']}#{row['n']}: {row['what']}")
+        if self.ledger is not None:
+            self.ledger.set("outside", [{"url": r["url"], "who": r["who"]} for r in rows])
+        return rows
+
     def waiting_issue(self) -> None:
         """One open issue in the bot's own repository lists every decision waiting on the owner. An item leaves the
         list when the owner replies on that thread, closes it, or ticks its box here."""
         if self.ledger is None or not self.home:
             return
         self.proposal_follow_ups()
+        outside_rows = self.outside_prs()
         home = f"{self.owner}/{self.cfg.get('home_repo', 'nexonic-sentinel')}"
         items = [i for i in self.ledger.get("waiting", []) if isinstance(i, dict) and i.get("repo") and i.get("n")]
         known = {(i["repo"], i["n"], i.get("kind")) for i in items}
@@ -475,17 +504,27 @@ class Sentinel:
             if not self._still_waiting(i):
                 continue  # the owner has answered or closed it
             keep.append(i)
+        fresh = {w["url"]: w["what"] for w in self.waiting if w.get("kind") == "outside"}
+        for i in keep:
+            if i.get("kind") == "outside" and i["url"] in fresh:
+                i["what"] = fresh[i["url"]]  # the newest explanation
         self.ledger.set("waiting", keep)
-        if not keep:
+        status = [r for r in outside_rows if r["who"] == "them"]
+        if not keep and not status:
             if current:
                 self._write(f"{home}#{current['number']}: nothing waiting, close the list", self.gh.request, "PATCH",
                             f"/repos/{home}/issues/{current['number']}", json={"state": "closed"})
             return
         lines = [WAIT_MARK, "Decisions waiting on you. The bot only replied and changed nothing. Reply on the thread "
                  "(or close it) when it's handled, or tick the box here, and it leaves this list.", ""]
-        kinds = {"discussion": " discussion ", "pr": " PR "}
-        lines += [f"- [ ] [{i['repo'].split('/', 1)[-1]}{kinds.get(i.get('kind', ''), '')}"
-                  f"#{i['n']}]({i['url']}): {i['what']}" for i in keep]
+        kinds = {"discussion": " discussion ", "pr": " PR ", "outside": " PR "}
+        lines += [f"- [ ] [{i['repo'] if i.get('kind') == 'outside' else i['repo'].split('/', 1)[-1]}"
+                  f"{kinds.get(i.get('kind', ''), '')}#{i['n']}]({i['url']}): {i['what']}" for i in keep]
+        if not keep:
+            lines.append("Nothing needs you right now.")
+        if status:
+            lines += ["", "**Your pull requests in other projects** (status only; the bot never posts there):", ""]
+            lines += [f"- [{r['repo']}#{r['n']}]({r['url']}) {r['title']}: {r['what']}" for r in status]
         body = "\n".join(lines)
         if current is None:
             self._write(f"{home}: create the Waiting on you list ({len(keep)})", self.gh.request, "POST",
@@ -499,6 +538,9 @@ class Sentinel:
         try:
             if i.get("kind") == "pr":
                 return self.gh.get(f"/repos/{i['repo']}/pulls/{i['n']}").get("state") == "open"
+            if i.get("kind") == "outside":
+                # Listed again on this run only while it still needs the owner (outside_prs re-adds it).
+                return any(w.get("url") == i["url"] for w in self.waiting if w.get("kind") == "outside")
             if i.get("kind") == "discussion":
                 owner, short = i["repo"].split("/", 1)
                 d = self.gh.graphql(DISCUSSION_STATE_Q, owner=owner, name=short, n=int(i["n"]))["repository"]["discussion"]
