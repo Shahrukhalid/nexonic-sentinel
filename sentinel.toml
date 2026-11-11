@@ -28,6 +28,11 @@ models = [
 free_models_max = 20
 exclude_models = ["content-safety", "guard", "2.6b"]  # classifiers and tiny models write poor fixes
 
+[outside_prs]
+# Your pull requests in other projects (package catalogues such as winget, Homebrew, Scoop). Read only: the bot never
+# posts there. Ones that need you go on "Waiting on you" with what to do; the rest are listed there as status.
+enabled = true
+
 [features]
 # Defaults for the owner's own repositories. Other accounts start with ai = false and no automatic merges.
 ai = true          # allow sending issue, discussion and code text to the models above
