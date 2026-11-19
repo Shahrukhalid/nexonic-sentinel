@@ -730,7 +730,7 @@ def test_sentinel_toml_enables_for_the_owner():
     import tomllib
     from pathlib import Path
     cfg = tomllib.loads((Path(__file__).resolve().parents[1] / "sentinel.toml").read_text())["iptv_review"]
-    assert cfg["enabled"] is True and cfg["repo"] == "Shahrukhalid/nexonic-iptv" and cfg["owner_login"] == "Shahrukhalid"
+    assert cfg["enabled"] is True and cfg["repo"] == "nexonic-technologies/nexonic-iptv" and cfg["owner_login"] == "Shahrukhalid"
 
 
 def test_reference_parser_reads_real_style_tables():

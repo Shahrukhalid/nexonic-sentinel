@@ -121,7 +121,7 @@ dependabot = ["patch", "minor"]
 # Everything is written to the one repository below, which must belong to the owner. Decisions are committed to its
 # default branch, so the GitHub App must be allowed to push there.
 enabled = true
-repo = "Shahrukhalid/nexonic-iptv"
+repo = "nexonic-technologies/nexonic-iptv"
 weekday = "monday"           # the weekly issue is opened on this day (or the first run after it)
 owner_login = "Shahrukhalid" # the only account whose commands are carried out
 suggestions = true           # turn valid suggestion issues into pending records

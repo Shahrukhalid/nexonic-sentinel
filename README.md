@@ -1,10 +1,10 @@
 # Nexonic Sentinel
 
-**Website: <https://shahrukhalid.github.io/nexonic-sentinel/>**
+**Website: <https://nexonictechnologies.com/project/nexonic-sentinel/>**
 
 **A free GitHub App that looks after your repositories.** It triages issues, reviews pull requests for bugs, scans your code each week, answers questions from your docs and merges safe dependency updates. It runs on GitHub Actions, so there's no server to keep online, and it uses free AI models.
 
-[![CI](https://github.com/Shahrukhalid/nexonic-sentinel/actions/workflows/ci.yml/badge.svg)](https://github.com/Shahrukhalid/nexonic-sentinel/actions/workflows/ci.yml)
+[![CI](https://github.com/nexonic-technologies/nexonic-sentinel/actions/workflows/ci.yml/badge.svg)](https://github.com/nexonic-technologies/nexonic-sentinel/actions/workflows/ci.yml)
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue)
 
 <p align="center"><img src="docs/demo.gif" alt="Nexonic Sentinel overview: free GitHub maintainer bot" width="820"></p>
@@ -108,14 +108,14 @@ On the owner's own public repositories, once a week each:
 **Monday digest:** one issue in the home repository with open work per repository, contributor pull requests waiting
 more than 7 days, failing checks on each main branch, commits not released yet and open security alerts (needs the
 app's "Dependabot alerts: read" permission). The same overview is published as a public
-[activity page](https://shahrukhalid.github.io/nexonic-sentinel/activity.html) (`activity_page = false` turns it off).
+[activity page](https://nexonictechnologies.com/project/nexonic-sentinel/) (`activity_page = false` turns it off).
 
 Settings are in the `[autopilot]` sections of [`sentinel.toml`](sentinel.toml). Nothing here posts in other people's
 projects.
 
 ## Channel review (owner only)
 
-For the owner's IPTV catalogue ([`nexonic-iptv`](https://github.com/Shahrukhalid/nexonic-iptv)), Nexonic Sentinel runs a small review workflow. It is off unless `[iptv_review] enabled = true`, it only works in the one repository named there (which must belong to the owner), and it stops at the first thing it is unsure about.
+For the owner's IPTV catalogue ([`nexonic-iptv`](https://github.com/nexonic-technologies/nexonic-iptv)), Nexonic Sentinel runs a small review workflow. It is off unless `[iptv_review] enabled = true`, it only works in the one repository named there (which must belong to the owner), and it stops at the first thing it is unsure about.
 
 | What | How it works |
 |---|---|
